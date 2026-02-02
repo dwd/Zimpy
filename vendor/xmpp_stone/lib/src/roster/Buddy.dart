@@ -4,6 +4,7 @@ class Buddy {
   SubscriptionType? subscriptionType;
 
   String? name;
+  List<String> groups = <String>[];
 
   Jid? accountJid;
 

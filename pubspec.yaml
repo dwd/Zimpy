@@ -36,6 +36,11 @@ dependencies:
   cupertino_icons: ^1.0.8
   xmpp_stone:
     path: vendor/xmpp_stone
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+  flutter_secure_storage: ^9.2.2
+  cryptography: ^2.7.0
+  shared_preferences: ^2.3.2
 
 dev_dependencies:
   flutter_test:

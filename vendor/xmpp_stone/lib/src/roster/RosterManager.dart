@@ -160,6 +160,16 @@ class RosterManager {
           var subscriptionString = child.getAttribute('subscription')?.value;
           var buddy = Buddy(jid);
           buddy.name = name;
+          var groups = <String>[];
+          child.children
+              .where((element) => element.name == 'group')
+              .forEach((groupElement) {
+            var groupName = groupElement.textValue?.trim();
+            if (groupName != null && groupName.isNotEmpty) {
+              groups.add(groupName);
+            }
+          });
+          buddy.groups = groups;
           buddy.accountJid = _connection.fullJid;
           buddy.subscriptionType = Buddy.typeFromString(subscriptionString);
           _rosterMap[jid] = buddy;
