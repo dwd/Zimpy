@@ -16,6 +16,7 @@ export 'src/elements/stanzas/AbstractStanza.dart';
 export 'src/elements/stanzas/IqStanza.dart';
 export 'src/elements/stanzas/MessageStanza.dart';
 export 'src/elements/stanzas/PresenceStanza.dart';
+export 'src/elements/nonzas/Nonza.dart';
 export 'src/extensions/ping/PingManager.dart';
 export 'src/extensions/vcard_temp/VCard.dart';
 export 'src/extensions/vcard_temp/VCardManager.dart';

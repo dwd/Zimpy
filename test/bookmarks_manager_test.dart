@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xmpp_stone/xmpp_stone.dart';
-import 'package:xmpp_stone/src/elements/nonzas/Nonza.dart';
 
 import 'package:zimpy/bookmarks/bookmarks_manager.dart';
 import 'package:zimpy/models/contact_entry.dart';

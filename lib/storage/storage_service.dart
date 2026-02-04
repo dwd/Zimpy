@@ -3,7 +3,6 @@ import 'dart:math';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:hive/hive.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
 import '../models/avatar_metadata.dart';

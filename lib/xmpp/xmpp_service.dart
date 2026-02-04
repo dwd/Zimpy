@@ -1,11 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
-
 import 'package:flutter/foundation.dart';
 import 'package:xmpp_stone/xmpp_stone.dart';
-import 'package:xmpp_stone/src/elements/nonzas/Nonza.dart';
-
 import '../models/chat_message.dart';
 import '../models/contact_entry.dart';
 import '../models/room_entry.dart';
@@ -23,7 +19,6 @@ enum XmppStatus {
 
 class XmppService extends ChangeNotifier {
   Connection? _connection;
-  RosterManager? _rosterManager;
   ChatManager? _chatManager;
   StreamSubscription<XmppConnectionState>? _connectionStateSubscription;
   StreamSubscription<List<Buddy>>? _rosterSubscription;
@@ -234,8 +229,6 @@ class XmppService extends ChangeNotifier {
         return 'do not disturb';
       case PresenceShowElement.XA:
         return 'extended away';
-      default:
-        return 'online';
     }
   }
 
@@ -246,6 +239,8 @@ class XmppService extends ChangeNotifier {
   String chatStateLabelFor(String bareJid) {
     final state = chatStateFor(bareJid);
     switch (state) {
+      case null:
+        return '';
       case ChatState.COMPOSING:
         return 'typing...';
       case ChatState.PAUSED:
@@ -256,8 +251,6 @@ class XmppService extends ChangeNotifier {
         return 'inactive';
       case ChatState.GONE:
         return 'gone';
-      default:
-        return '';
     }
   }
 
@@ -291,7 +284,6 @@ class XmppService extends ChangeNotifier {
     }
 
     final bareJid = _bareJid(normalized);
-    final domain = _domainFromBareJid(bareJid);
     final fullJid = normalized.contains('/') ? normalized : '$bareJid/$resource';
 
     await _safeClose(preserveCache: true);
@@ -562,7 +554,6 @@ class XmppService extends ChangeNotifier {
     }
 
     final rosterManager = RosterManager.getInstance(connection);
-    _rosterManager = rosterManager;
 
     _rosterSubscription?.cancel();
     _rosterSubscription = rosterManager.rosterStream.listen((buddies) {
@@ -1239,7 +1230,6 @@ class XmppService extends ChangeNotifier {
     _activeChatBareJid = null;
     _currentUserBareJid = null;
     _lastConnectionState = null;
-    _rosterManager = null;
     _chatManager = null;
     if (!preserveCache) {
       _contacts.clear();

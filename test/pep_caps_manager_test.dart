@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xmpp_stone/xmpp_stone.dart';
-import 'package:xmpp_stone/src/elements/nonzas/Nonza.dart';
 
 import 'package:zimpy/models/avatar_metadata.dart';
 import 'package:zimpy/pep/pep_caps_manager.dart';

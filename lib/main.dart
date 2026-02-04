@@ -53,10 +53,8 @@ class _ZimpyAppState extends State<ZimpyApp> {
       onPrimary: Color(0xFFFDFCF8),
       secondary: Color(0xFFEE6C4D),
       onSecondary: Color(0xFFFDFCF8),
-      surface: Color(0xFFF7F2E7),
+      surface: Color(0xFFF1EADF),
       onSurface: Color(0xFF1B1A17),
-      background: Color(0xFFF1EADF),
-      onBackground: Color(0xFF1B1A17),
       error: Color(0xFFB00020),
       onError: Color(0xFFFDFCF8),
     );
@@ -66,7 +64,7 @@ class _ZimpyAppState extends State<ZimpyApp> {
       theme: ThemeData(
         colorScheme: colorScheme,
         useMaterial3: true,
-        scaffoldBackgroundColor: colorScheme.background,
+        scaffoldBackgroundColor: colorScheme.surface,
         fontFamily: 'Georgia',
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
@@ -315,11 +313,11 @@ class _ZimpyHomeState extends State<ZimpyHome> {
                   const SizedBox(height: 24),
                   Container(
                     decoration: BoxDecoration(
-                      color: theme.colorScheme.surface.withOpacity(0.9),
+                      color: theme.colorScheme.surface.withValues(alpha: 0.9),
                       borderRadius: BorderRadius.circular(20),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black.withOpacity(0.08),
+                          color: Colors.black.withValues(alpha: 0.08),
                           blurRadius: 24,
                           offset: const Offset(0, 12),
                         ),
@@ -565,7 +563,7 @@ class _ZimpyHomeState extends State<ZimpyHome> {
                               borderRadius: BorderRadius.circular(12),
                               border: Border.all(
                                 color: isBookmark
-                                    ? theme.colorScheme.primary.withOpacity(0.35)
+                                    ? theme.colorScheme.primary.withValues(alpha: 0.35)
                                     : theme.colorScheme.outlineVariant,
                               ),
                             ),
@@ -629,7 +627,7 @@ class _ZimpyHomeState extends State<ZimpyHome> {
                                               Container(
                                                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                                 decoration: BoxDecoration(
-                                                  color: theme.colorScheme.primary.withOpacity(0.1),
+                                                color: theme.colorScheme.primary.withValues(alpha: 0.1),
                                                   borderRadius: BorderRadius.circular(10),
                                                 ),
                                                 child: Text(
@@ -841,12 +839,12 @@ class _ZimpyHomeState extends State<ZimpyHome> {
                         ),
                         if (!(roomEntry?.joined ?? false))
                           TextButton(
-                            onPressed: activeChat == null ? null : () => service.joinRoom(activeChat),
+                            onPressed: () => service.joinRoom(activeChat),
                             child: const Text('Join'),
                           )
                         else
                           TextButton(
-                            onPressed: activeChat == null ? null : () => service.leaveRoom(activeChat),
+                            onPressed: () => service.leaveRoom(activeChat),
                             child: const Text('Leave'),
                           ),
                       ],
@@ -1063,13 +1061,13 @@ class _MessageBubble extends StatelessWidget {
                     Expanded(
                       child: Text(
                         senderName,
-                        style: theme.textTheme.labelMedium?.copyWith(color: textColor.withOpacity(0.85)),
+                        style: theme.textTheme.labelMedium?.copyWith(color: textColor.withValues(alpha: 0.85)),
                       ),
                     ),
                     const SizedBox(width: 8),
                     Text(
                       timestamp,
-                      style: theme.textTheme.labelSmall?.copyWith(color: textColor.withOpacity(0.7)),
+                      style: theme.textTheme.labelSmall?.copyWith(color: textColor.withValues(alpha: 0.7)),
                     ),
                   ],
                 ),
@@ -1170,7 +1168,7 @@ class _AvatarPlaceholder extends StatelessWidget {
     }
     return CircleAvatar(
       radius: 18,
-      backgroundColor: theme.colorScheme.primary.withOpacity(0.2),
+      backgroundColor: theme.colorScheme.primary.withValues(alpha: 0.2),
       foregroundColor: theme.colorScheme.primary,
       child: Text(initial),
     );
@@ -1212,8 +1210,6 @@ Color _presenceDotColor(ThemeData theme, PresenceShowElement? show) {
       return const Color(0xFFC62828);
     case PresenceShowElement.XA:
       return const Color(0xFFF9A825);
-    default:
-      return const Color(0xFFB0B7BF);
   }
 }
 
