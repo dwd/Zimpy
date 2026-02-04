@@ -123,6 +123,7 @@ class Connection {
   }
 
   xmppSocket.XmppWebSocket? _socket;
+  StreamSubscription<String>? _socketSubscription;
 
   // for testing purpose
   set socket(xmppSocket.XmppWebSocket? value) {
@@ -209,7 +210,8 @@ class Connection {
         if (_state != XmppConnectionState.Closed) {
           setState(XmppConnectionState.SocketOpened);
           _socket = socket;
-          socket.listen(handleResponse, onDone: handleConnectionDone);
+          _socketSubscription?.cancel();
+          _socketSubscription = socket.listen(handleResponse, onDone: handleConnectionDone);
           _openStream();
         } else {
           Log.d(TAG, 'Closed in meantime');
@@ -232,6 +234,7 @@ class Connection {
       if (_socket != null) {
         try {
           setState(XmppConnectionState.Closing);
+          _socketSubscription?.cancel();
           _socket!.write('</stream:stream>');
         } on Exception {
           Log.d(TAG, 'Socket already closed');
@@ -401,7 +404,8 @@ class Connection {
         .then((secureSocket) {
       if (secureSocket == null) return;
 
-      secureSocket
+      _socketSubscription?.cancel();
+      _socketSubscription = secureSocket
           .cast<List<int>>()
           .transform(utf8.decoder)
           .map(prepareStreamResponse)

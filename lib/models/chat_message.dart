@@ -5,6 +5,9 @@ class ChatMessage {
     required this.body,
     required this.timestamp,
     required this.outgoing,
+    this.messageId,
+    this.mamId,
+    this.stanzaId,
   });
 
   final String from;
@@ -12,6 +15,9 @@ class ChatMessage {
   final String body;
   final DateTime timestamp;
   final bool outgoing;
+  final String? messageId;
+  final String? mamId;
+  final String? stanzaId;
 
   Map<String, dynamic> toMap() {
     return {
@@ -20,6 +26,9 @@ class ChatMessage {
       'body': body,
       'timestamp': timestamp.toIso8601String(),
       'outgoing': outgoing,
+      'messageId': messageId,
+      'mamId': mamId,
+      'stanzaId': stanzaId,
     };
   }
 
@@ -32,6 +41,9 @@ class ChatMessage {
     final body = map['body']?.toString() ?? '';
     final ts = map['timestamp']?.toString() ?? '';
     final outgoing = map['outgoing'] == true;
+    final messageId = map['messageId']?.toString();
+    final mamId = map['mamId']?.toString();
+    final stanzaId = map['stanzaId']?.toString();
     if (from.isEmpty || to.isEmpty || body.isEmpty || ts.isEmpty) {
       return null;
     }
@@ -45,6 +57,9 @@ class ChatMessage {
       body: body,
       timestamp: timestamp,
       outgoing: outgoing,
+      messageId: messageId,
+      mamId: mamId,
+      stanzaId: stanzaId,
     );
   }
 }

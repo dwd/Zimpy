@@ -25,6 +25,7 @@ export 'src/logger/Log.dart';
 export 'src/messages/MessageApi.dart';
 export 'src/messages/MessageHandler.dart';
 export 'src/messages/MessagesListener.dart';
+export 'src/muc/MucManager.dart';
 export 'src/presence/PresenceApi.dart';
 export 'src/presence/PresenceManager.dart';
 export 'src/roster/Buddy.dart';

@@ -19,6 +19,7 @@ class Message {
   String? _stanzaId;
   String? _threadId;
   String? _queryId; //To be determined if needed
+  String? _mamResultId;
   bool? _isDelayed;
   bool? _isForwarded;
   MessageStanzaType? _type;
@@ -34,6 +35,7 @@ class Message {
       bool? isDelayed,
       String? queryId,
       String? messageId,
+      String? mamResultId,
       MessageStanzaType? type,
       ChatState? chatState}) {
     _stanzaId = stanzaId;
@@ -42,6 +44,7 @@ class Message {
     _isDelayed = isDelayed;
     _queryId = queryId;
     _messageId = messageId;
+    _mamResultId = mamResultId;
     _type = type;
     _chatState = chatState;
   }
@@ -84,6 +87,7 @@ class Message {
           }
 
           var body = message.getChild('body')?.textValue;
+          var messageId = message.getAttribute('id')?.value;
           var type = (_parseType(message));
           var chatState = _parseState(message);
           var threadId = message.getChild('thread')?.textValue;
@@ -94,6 +98,7 @@ class Message {
               threadId: threadId,
               isForwarded: true,
               isDelayed: delayed,
+              messageId: messageId,
               chatState: chatState,
               type: type);
         }
@@ -110,6 +115,7 @@ class Message {
 
     try {
       var queryId = result?.getAttribute('queryId')?.value;
+      var mamResultId = result?.getAttribute('id')?.value;
       var forwarded = result?.getChild('forwarded');
       if (forwarded != null) {
         var message = forwarded.getChild('message');
@@ -127,6 +133,7 @@ class Message {
           }
 
           var body = message.getChild('body')?.textValue;
+          var messageId = message.getAttribute('id')?.value;
           var threadId = message.getChild('thread')?.textValue;
           var stanzaId =
               message.getChild('stanza-id')?.getAttribute('id')?.value;
@@ -140,7 +147,9 @@ class Message {
               isForwarded: true,
               queryId: queryId,
               isDelayed: delayed,
+              messageId: messageId,
               stanzaId: stanzaId,
+              mamResultId: mamResultId,
               chatState: chatState,
               type: type);
         }
@@ -210,7 +219,8 @@ class Message {
         stanza, stanza.toJid, stanza.fromJid, stanza.body, DateTime.now(),
         chatState: _parseState(stanza),
         threadId: stanza.thread,
-        type: _parseType(stanza));
+        type: _parseType(stanza),
+        messageId: stanza.id);
   }
 
   static DateTime? _parseDelayed(XmppElement element) {
@@ -232,6 +242,7 @@ class Message {
   String? get threadId => _threadId;
 
   String? get queryId => _queryId;
+  String? get mamResultId => _mamResultId;
 
   bool? get isDelayed => _isDelayed;
 

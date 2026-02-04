@@ -1,6 +1,6 @@
 ## Plan
 - Keep this plan updated throughout the work and ensure this instruction remains in the plan.
-- Current status: StartTLS now negotiates; patched xmpp_stone secure socket to swap the underlying socket after TLS. Next step is to re-run `flutter run` and confirm auth succeeds.
+- Current status: MUC (XEP-0045) support is implemented end-to-end with basic tests. Next step is to run tests and walk the manual MUC checklist.
 
 ## Local Data Strategy (implemented)
 - Storage: Hive encrypted box now stores chat history, roster cache, settings, and the XMPP account password.

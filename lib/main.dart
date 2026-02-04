@@ -1,10 +1,14 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xmpp_stone/xmpp_stone.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'models/chat_message.dart';
+import 'models/room_entry.dart';
 import 'storage/account_record.dart';
 import 'storage/storage_service.dart';
 import 'xmpp/xmpp_service.dart';
@@ -177,20 +181,29 @@ class _ZimpyHomeState extends State<ZimpyHome> {
   final TextEditingController _resourceController = TextEditingController(text: 'zimpy');
   final TextEditingController _manualContactController = TextEditingController();
   final TextEditingController _messageController = TextEditingController();
+  final FocusNode _messageFocusNode = FocusNode();
+  final ScrollController _messageScrollController = ScrollController();
   bool _loadedAccount = false;
   bool _clearingCache = false;
   Timer? _typingDebounce;
   Timer? _idleTimer;
   ChatState? _lastSentChatState;
+  String? _lastFocusedChat;
+  int _lastMessageCount = 0;
+  bool _wasAtBottom = true;
 
   @override
   void initState() {
     super.initState();
+    _messageScrollController.addListener(_handleScrollPosition);
+    widget.service.attachStorage(widget.storage);
     widget.service.setRosterPersistor((roster) => widget.storage.storeRoster(roster));
+    widget.service.setBookmarkPersistor((bookmarks) => widget.storage.storeBookmarks(bookmarks));
     widget.service.setMessagePersistor(
       (bareJid, messages) => widget.storage.storeMessagesForJid(bareJid, messages),
     );
     _seedRoster();
+    _seedBookmarks();
     _seedMessages();
     _loadAccount();
   }
@@ -203,6 +216,11 @@ class _ZimpyHomeState extends State<ZimpyHome> {
   Future<void> _seedMessages() async {
     final messages = widget.storage.loadMessages();
     widget.service.seedMessages(messages);
+  }
+
+  Future<void> _seedBookmarks() async {
+    final bookmarks = widget.storage.loadBookmarks();
+    widget.service.seedBookmarks(bookmarks);
   }
 
   Future<void> _loadAccount() async {
@@ -231,6 +249,9 @@ class _ZimpyHomeState extends State<ZimpyHome> {
   void dispose() {
     _typingDebounce?.cancel();
     _idleTimer?.cancel();
+    _messageScrollController.removeListener(_handleScrollPosition);
+    _messageFocusNode.dispose();
+    _messageScrollController.dispose();
     _jidController.dispose();
     _passwordController.dispose();
     _hostController.dispose();
@@ -516,62 +537,151 @@ class _ZimpyHomeState extends State<ZimpyHome> {
                       itemBuilder: (context, index) {
                         final contact = contacts[index];
                         final jid = contact.jid;
-                        final latest = service.messagesFor(jid).lastOrNull;
-                        final presence = service.presenceLabelFor(jid);
-                        final groups = contact.groups;
-                        final groupsLabel = groups.isEmpty ? null : groups.join(', ');
+                        final isBookmark = contact.isBookmark;
+                        final isServerNotFound = service.isServerNotFound(jid);
+                        final latest = isBookmark
+                            ? service.roomMessagesFor(jid).lastOrNull
+                            : service.messagesFor(jid).lastOrNull;
+                        final presence = service.presenceFor(jid);
+                        final statusText = presence?.status?.trim();
+                        final effectiveStatusText =
+                            statusText != null && statusText.toLowerCase() == 'unavailable'
+                                ? null
+                                : statusText;
+                        final show = (statusText != null && statusText.toLowerCase() == 'unavailable')
+                            ? null
+                            : (presence?.showElement ?? (presence != null ? PresenceShowElement.CHAT : null));
+                        final dotColor = _presenceDotColor(theme, show);
+                        final avatarBytes = service.avatarBytesFor(jid);
+                        final bookmarkStatusText = contact.bookmarkNick?.isNotEmpty == true
+                            ? 'Nickname: ${contact.bookmarkNick}'
+                            : (contact.bookmarkAutoJoin ? 'Auto-join room' : 'Room bookmark');
                         return InkWell(
                           onTap: () => service.selectChat(jid),
                           child: Container(
-                            padding: const EdgeInsets.all(12),
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                             decoration: BoxDecoration(
                               color: theme.colorScheme.surface,
                               borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: theme.colorScheme.outlineVariant),
+                              border: Border.all(
+                                color: isBookmark
+                                    ? theme.colorScheme.primary.withOpacity(0.35)
+                                    : theme.colorScheme.outlineVariant,
+                              ),
                             ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(contact.displayName, style: theme.textTheme.titleMedium),
-                                if (contact.displayName != jid) ...[
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    jid,
-                                    style: theme.textTheme.bodySmall?.copyWith(
-                                      color: theme.colorScheme.onSurfaceVariant,
+                            child: Opacity(
+                              opacity: isServerNotFound ? 0.5 : 1.0,
+                              child: Row(
+                                children: [
+                                  Stack(
+                                    children: [
+                                      _AvatarPlaceholder(label: contact.displayName, bytes: avatarBytes),
+                                      if (isBookmark)
+                                        Positioned(
+                                          right: 0,
+                                          bottom: 0,
+                                          child: Container(
+                                            padding: const EdgeInsets.all(2),
+                                            decoration: BoxDecoration(
+                                              color: theme.colorScheme.surface,
+                                              shape: BoxShape.circle,
+                                              border: Border.all(color: theme.colorScheme.primary, width: 1.2),
+                                            ),
+                                            child: Icon(
+                                              Icons.meeting_room,
+                                              size: 12,
+                                              color: theme.colorScheme.primary,
+                                            ),
+                                          ),
+                                        )
+                                      else
+                                        Positioned(
+                                          right: 0,
+                                          bottom: 0,
+                                          child: Container(
+                                            width: 12,
+                                            height: 12,
+                                            decoration: BoxDecoration(
+                                              color: dotColor,
+                                              shape: BoxShape.circle,
+                                              border: Border.all(color: theme.colorScheme.surface, width: 2),
+                                            ),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Flexible(
+                                              child: Text(
+                                                contact.displayName,
+                                                style: theme.textTheme.titleMedium,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
+                                            if (isBookmark) ...[
+                                              const SizedBox(width: 6),
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                decoration: BoxDecoration(
+                                                  color: theme.colorScheme.primary.withOpacity(0.1),
+                                                  borderRadius: BorderRadius.circular(10),
+                                                ),
+                                                child: Text(
+                                                  'ROOM',
+                                                  style: theme.textTheme.labelSmall?.copyWith(
+                                                    color: theme.colorScheme.primary,
+                                                    letterSpacing: 0.6,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ],
+                                        ),
+                                        if (contact.displayName != jid) ...[
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            jid,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: theme.textTheme.bodySmall?.copyWith(
+                                              color: theme.colorScheme.onSurfaceVariant,
+                                            ),
+                                          ),
+                                        ],
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          isBookmark ? bookmarkStatusText : (effectiveStatusText ?? ''),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: theme.textTheme.bodySmall?.copyWith(
+                                            color: theme.colorScheme.onSurfaceVariant,
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
-                                ],
-                                const SizedBox(height: 4),
-                                Text(
-                                  presence,
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: theme.colorScheme.onSurfaceVariant,
-                                  ),
-                                ),
-                                if (groupsLabel != null) ...[
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    groupsLabel,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: theme.textTheme.bodySmall?.copyWith(
-                                      color: theme.colorScheme.onSurfaceVariant,
+                                  if (latest != null) ...[
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        latest.body,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        textAlign: TextAlign.right,
+                                        style: theme.textTheme.bodySmall?.copyWith(
+                                          color: theme.colorScheme.onSurfaceVariant,
+                                        ),
+                                      ),
                                     ),
-                                  ),
+                                  ],
                                 ],
-                                if (latest != null) ...[
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    latest.body,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: theme.textTheme.bodySmall?.copyWith(
-                                      color: theme.colorScheme.onSurfaceVariant,
-                                    ),
-                                  ),
-                                ],
-                              ],
+                              ),
                             ),
                           ),
                         );
@@ -599,7 +709,29 @@ class _ZimpyHomeState extends State<ZimpyHome> {
     required bool showBack,
   }) {
     final theme = Theme.of(context);
-    final messages = activeChat == null ? const <ChatMessage>[] : service.messagesFor(activeChat);
+    final isBookmark = activeChat != null && service.isBookmark(activeChat);
+    final messages = activeChat == null
+        ? const <ChatMessage>[]
+        : isBookmark
+            ? service.roomMessagesFor(activeChat)
+            : service.messagesFor(activeChat);
+    final roomEntry = activeChat == null ? null : service.roomFor(activeChat);
+    _handleAutoScroll(messages.length);
+    if (activeChat == null) {
+      _lastFocusedChat = null;
+      _lastMessageCount = 0;
+    } else if (activeChat != _lastFocusedChat) {
+      _lastFocusedChat = activeChat;
+      _lastMessageCount = messages.length;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          if (!isBookmark) {
+            _messageFocusNode.requestFocus();
+          }
+          _scrollToBottom();
+        }
+      });
+    }
 
     return SafeArea(
       child: Column(
@@ -624,9 +756,11 @@ class _ZimpyHomeState extends State<ZimpyHome> {
                       Text(
                         activeChat == null
                             ? 'Secure connection active'
-                            : service.chatStateLabelFor(activeChat).isNotEmpty
-                                ? service.chatStateLabelFor(activeChat)
-                                : 'Secure connection active',
+                            : isBookmark
+                                ? _roomSubtitle(roomEntry)
+                                : service.chatStateLabelFor(activeChat).isNotEmpty
+                                    ? service.chatStateLabelFor(activeChat)
+                                    : 'Secure connection active',
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
@@ -647,11 +781,24 @@ class _ZimpyHomeState extends State<ZimpyHome> {
                     ),
                   )
                 : ListView.builder(
+                    controller: _messageScrollController,
                     padding: const EdgeInsets.all(16),
                     itemCount: messages.length,
                     itemBuilder: (context, index) {
                       final message = messages[index];
-                      return _MessageBubble(message: message);
+                      final senderName = isBookmark
+                          ? (message.outgoing ? 'You' : message.from)
+                          : message.outgoing
+                              ? 'You'
+                              : service.displayNameFor(message.from);
+                      final timestamp = _formatTimestamp(message.timestamp);
+                      final avatarBytes = isBookmark ? null : service.avatarBytesFor(message.from);
+                      return _MessageBubble(
+                        message: message,
+                        senderName: senderName,
+                        timestamp: timestamp,
+                        avatarBytes: avatarBytes,
+                      );
                     },
                   ),
           ),
@@ -661,28 +808,79 @@ class _ZimpyHomeState extends State<ZimpyHome> {
               color: theme.colorScheme.surface,
               border: Border(top: BorderSide(color: theme.colorScheme.outlineVariant)),
             ),
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: TextField(
-                    controller: _messageController,
-                    enabled: activeChat != null,
-                    decoration: const InputDecoration(
-                      labelText: 'Message',
+                if (activeChat != null &&
+                    service.chatStateLabelFor(activeChat).isNotEmpty) ...[
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Text(
+                      service.chatStateLabelFor(activeChat),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        fontStyle: FontStyle.italic,
+                      ),
                     ),
-                    onChanged: (value) {
-                      if (activeChat == null) {
-                        return;
-                      }
-                      _handleTypingState(service, activeChat, value);
-                    },
-                    onSubmitted: (_) => _sendMessage(activeChat),
                   ),
-                ),
-                const SizedBox(width: 12),
-                FilledButton(
-                  onPressed: activeChat == null ? null : () => _sendMessage(activeChat),
-                  child: const Text('Send'),
+                ],
+                if (isBookmark) ...[
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            (roomEntry?.joined ?? false)
+                                ? 'Joined room'
+                                : 'Not joined',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                        if (!(roomEntry?.joined ?? false))
+                          TextButton(
+                            onPressed: activeChat == null ? null : () => service.joinRoom(activeChat),
+                            child: const Text('Join'),
+                          )
+                        else
+                          TextButton(
+                            onPressed: activeChat == null ? null : () => service.leaveRoom(activeChat),
+                            child: const Text('Leave'),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _messageController,
+                        focusNode: _messageFocusNode,
+                        autofocus: activeChat != null && (!isBookmark || (roomEntry?.joined ?? false)),
+                        enabled: activeChat != null && (!isBookmark || (roomEntry?.joined ?? false)),
+                        decoration: const InputDecoration(
+                          labelText: 'Message',
+                        ),
+                        onChanged: (value) {
+                          if (activeChat == null || isBookmark) {
+                            return;
+                          }
+                          _handleTypingState(service, activeChat, value);
+                        },
+                        onSubmitted: (_) => _sendMessage(activeChat),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    FilledButton(
+                      onPressed: activeChat == null || (isBookmark && !(roomEntry?.joined ?? false))
+                          ? null
+                          : () => _sendMessage(activeChat),
+                      child: const Text('Send'),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -720,8 +918,12 @@ class _ZimpyHomeState extends State<ZimpyHome> {
     }
     final text = _messageController.text;
     _messageController.clear();
-    widget.service.sendMessage(toBareJid: activeChat, text: text);
-    _setChatState(activeChat, ChatState.ACTIVE);
+    if (widget.service.isBookmark(activeChat)) {
+      widget.service.sendRoomMessage(activeChat, text);
+    } else {
+      widget.service.sendMessage(toBareJid: activeChat, text: text);
+      _setChatState(activeChat, ChatState.ACTIVE);
+    }
   }
 
   void _handleTypingState(XmppService service, String activeChat, String value) {
@@ -752,6 +954,44 @@ class _ZimpyHomeState extends State<ZimpyHome> {
     widget.service.setMyChatState(bareJid, state);
   }
 
+  void _handleAutoScroll(int messageCount) {
+    if (messageCount == _lastMessageCount) {
+      return;
+    }
+    _lastMessageCount = messageCount;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      if (!_messageScrollController.hasClients) {
+        return;
+      }
+      if (_wasAtBottom) {
+        _scrollToBottom();
+      }
+    });
+  }
+
+  void _handleScrollPosition() {
+    if (!_messageScrollController.hasClients) {
+      _wasAtBottom = true;
+      return;
+    }
+    final position = _messageScrollController.position;
+    _wasAtBottom = position.pixels >= (position.maxScrollExtent - 48);
+  }
+
+  void _scrollToBottom() {
+    if (!_messageScrollController.hasClients) {
+      return;
+    }
+    _messageScrollController.animateTo(
+      _messageScrollController.position.maxScrollExtent,
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOut,
+    );
+  }
+
   Future<void> _confirmClearCache() async {
     final shouldClear = await showDialog<bool>(
       context: context,
@@ -777,7 +1017,10 @@ class _ZimpyHomeState extends State<ZimpyHome> {
     }
     setState(() => _clearingCache = true);
     await widget.storage.clearRoster();
+    await widget.storage.clearBookmarks();
     await widget.storage.storeMessagesForJid('', const []);
+    await widget.storage.clearAvatars();
+    await widget.storage.clearVcardAvatars();
     widget.service.clearCache();
     if (mounted) {
       setState(() => _clearingCache = false);
@@ -786,47 +1029,192 @@ class _ZimpyHomeState extends State<ZimpyHome> {
 }
 
 class _MessageBubble extends StatelessWidget {
-  const _MessageBubble({required this.message});
+  const _MessageBubble({
+    required this.message,
+    required this.senderName,
+    required this.timestamp,
+    required this.avatarBytes,
+  });
 
   final ChatMessage message;
+  final String senderName;
+  final String timestamp;
+  final Uint8List? avatarBytes;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isOutgoing = message.outgoing == true;
-    final alignment = isOutgoing ? Alignment.centerRight : Alignment.centerLeft;
-    final bubbleColor = isOutgoing ? theme.colorScheme.primary : theme.colorScheme.surface;
-    final textColor = isOutgoing ? theme.colorScheme.onPrimary : theme.colorScheme.onSurface;
+    final textColor = theme.colorScheme.onSurface;
+    final linkColor = theme.colorScheme.primary;
 
-    return Align(
-      alignment: alignment,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 6),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        constraints: const BoxConstraints(maxWidth: 520),
-        decoration: BoxDecoration(
-          color: bubbleColor,
-          borderRadius: BorderRadius.circular(16),
-          border: isOutgoing ? null : Border.all(color: theme.colorScheme.outlineVariant),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 10,
-              offset: const Offset(0, 6),
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _AvatarPlaceholder(label: senderName, bytes: avatarBytes),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        senderName,
+                        style: theme.textTheme.labelMedium?.copyWith(color: textColor.withOpacity(0.85)),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      timestamp,
+                      style: theme.textTheme.labelSmall?.copyWith(color: textColor.withOpacity(0.7)),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                RichText(
+                  text: TextSpan(
+                    style: theme.textTheme.bodyMedium?.copyWith(color: textColor),
+                    children: _linkifyText(
+                      message.body,
+                      theme.textTheme.bodyMedium?.copyWith(color: textColor),
+                      theme.textTheme.bodyMedium?.copyWith(
+                        color: linkColor,
+                        decoration: TextDecoration.underline,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
-        child: Text(
-          message.body,
-          style: theme.textTheme.bodyMedium?.copyWith(color: textColor),
-        ),
+          ),
+        ],
       ),
     );
+  }
+
+  List<TextSpan> _linkifyText(String input, TextStyle? baseStyle, TextStyle? linkStyle) {
+    final regex = RegExp(r'((https?:\/\/)|(www\.))[^\s<]+', caseSensitive: false);
+    final matches = regex.allMatches(input).toList();
+    if (matches.isEmpty) {
+      return [TextSpan(text: input, style: baseStyle)];
+    }
+
+    final spans = <TextSpan>[];
+    var lastIndex = 0;
+    for (final match in matches) {
+      if (match.start > lastIndex) {
+        spans.add(TextSpan(text: input.substring(lastIndex, match.start), style: baseStyle));
+      }
+      final raw = input.substring(match.start, match.end);
+      final normalized = _normalizeUrl(raw);
+      spans.add(TextSpan(
+        text: raw,
+        style: linkStyle ?? baseStyle,
+        recognizer: TapGestureRecognizer()
+          ..onTap = () async {
+            final uri = Uri.tryParse(normalized);
+            if (uri == null) {
+              return;
+            }
+            await launchUrl(uri, mode: LaunchMode.externalApplication);
+          },
+      ));
+      lastIndex = match.end;
+    }
+    if (lastIndex < input.length) {
+      spans.add(TextSpan(text: input.substring(lastIndex), style: baseStyle));
+    }
+    return spans;
+  }
+
+  String _normalizeUrl(String raw) {
+    final stripped = _stripTrailingPunctuation(raw);
+    final lower = stripped.toLowerCase();
+    if (lower.startsWith('http://') || lower.startsWith('https://')) {
+      return stripped;
+    }
+    return 'https://$stripped';
+  }
+
+  String _stripTrailingPunctuation(String input) {
+    var result = input;
+    while (result.isNotEmpty && RegExp(r'[\\).,!?;:\\]]').hasMatch(result[result.length - 1])) {
+      result = result.substring(0, result.length - 1);
+    }
+    return result;
   }
 }
 
 extension ListLastOrNull<T> on List<T> {
   T? get lastOrNull => isEmpty ? null : last;
+}
+
+class _AvatarPlaceholder extends StatelessWidget {
+  const _AvatarPlaceholder({required this.label, this.bytes});
+
+  final String label;
+  final Uint8List? bytes;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final initial = label.trim().isEmpty ? '?' : label.trim()[0].toUpperCase();
+    if (bytes != null) {
+      return CircleAvatar(
+        radius: 18,
+        backgroundImage: MemoryImage(bytes!),
+      );
+    }
+    return CircleAvatar(
+      radius: 18,
+      backgroundColor: theme.colorScheme.primary.withOpacity(0.2),
+      foregroundColor: theme.colorScheme.primary,
+      child: Text(initial),
+    );
+  }
+}
+
+String _formatTimestamp(DateTime timestamp) {
+  final local = timestamp.toLocal();
+  final hours = local.hour.toString().padLeft(2, '0');
+  final minutes = local.minute.toString().padLeft(2, '0');
+  return '$hours:$minutes';
+}
+
+String _roomSubtitle(RoomEntry? entry) {
+  if (entry == null) {
+    return 'Room';
+  }
+  final parts = <String>[];
+  if (entry.subject != null && entry.subject!.isNotEmpty) {
+    parts.add(entry.subject!);
+  }
+  parts.add(entry.joined ? 'Joined' : 'Not joined');
+  if (entry.occupantCount > 0) {
+    parts.add('${entry.occupantCount} online');
+  }
+  return parts.join(' · ');
+}
+
+Color _presenceDotColor(ThemeData theme, PresenceShowElement? show) {
+  if (show == null) {
+    return theme.colorScheme.outlineVariant;
+  }
+  switch (show) {
+    case PresenceShowElement.CHAT:
+      return const Color(0xFF2FB84D);
+    case PresenceShowElement.AWAY:
+      return const Color(0xFFF9A825);
+    case PresenceShowElement.DND:
+      return const Color(0xFFC62828);
+    case PresenceShowElement.XA:
+      return const Color(0xFFF9A825);
+    default:
+      return const Color(0xFFB0B7BF);
+  }
 }
 
 class _PresenceMenu extends StatelessWidget {
