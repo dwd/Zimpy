@@ -1130,6 +1130,7 @@ class _MessageBubble extends StatelessWidget {
     final theme = Theme.of(context);
     final textColor = theme.colorScheme.onSurface;
     final linkColor = theme.colorScheme.primary;
+    final tickIcon = _tickIcon(theme);
 
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
@@ -1151,9 +1152,18 @@ class _MessageBubble extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    Text(
-                      timestamp,
-                      style: theme.textTheme.labelSmall?.copyWith(color: textColor.withValues(alpha: 0.7)),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          timestamp,
+                          style: theme.textTheme.labelSmall?.copyWith(color: textColor.withValues(alpha: 0.7)),
+                        ),
+                        if (tickIcon != null) ...[
+                          const SizedBox(width: 6),
+                          tickIcon,
+                        ],
+                      ],
                     ),
                   ],
                 ),
@@ -1177,6 +1187,30 @@ class _MessageBubble extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  Widget? _tickIcon(ThemeData theme) {
+    if (!message.outgoing) {
+      return null;
+    }
+    if (message.displayed) {
+      return Icon(Icons.done_all, size: 14, color: theme.colorScheme.primary);
+    }
+    if (message.receiptReceived) {
+      return Icon(
+        Icons.done_all,
+        size: 14,
+        color: theme.colorScheme.onSurfaceVariant,
+      );
+    }
+    if (message.acked) {
+      return Icon(
+        Icons.done,
+        size: 14,
+        color: theme.colorScheme.onSurfaceVariant,
+      );
+    }
+    return null;
   }
 
   List<TextSpan> _linkifyText(String input, TextStyle? baseStyle, TextStyle? linkStyle) {

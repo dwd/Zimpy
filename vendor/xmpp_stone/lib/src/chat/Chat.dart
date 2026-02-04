@@ -60,6 +60,16 @@ class ChatImpl implements Chat {
     stanza.toJid = _jid;
     stanza.fromJid = _connection.fullJid;
     stanza.body = text;
+    var receiptRequest = XmppElement();
+    receiptRequest.name = 'request';
+    receiptRequest.addAttribute(
+        XmppAttribute('xmlns', 'urn:xmpp:receipts'));
+    stanza.addChild(receiptRequest);
+    var markable = XmppElement();
+    markable.name = 'markable';
+    markable.addAttribute(
+        XmppAttribute('xmlns', 'urn:xmpp:chat-markers:0'));
+    stanza.addChild(markable);
     var message = Message.fromStanza(stanza);
     messages!.add(message);
     _newMessageController.add(message);

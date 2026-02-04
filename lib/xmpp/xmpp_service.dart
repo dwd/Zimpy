@@ -28,6 +28,8 @@ class XmppService extends ChangeNotifier {
   StreamSubscription<PresenceErrorEvent>? _presenceErrorSubscription;
   StreamSubscription<Nonza>? _smNonzaSubscription;
   StreamSubscription<AbstractStanza?>? _pingSubscription;
+  StreamSubscription<MessageStanza?>? _messageStanzaSubscription;
+  StreamSubscription<AbstractStanza>? _smDeliveredSubscription;
   StreamSubscription<AbstractStanza?>? _pepSubscription;
   Timer? _pingTimer;
   final Map<String, DateTime> _pendingPings = {};
@@ -51,6 +53,7 @@ class XmppService extends ChangeNotifier {
   final Map<String, DateTime> _lastSeenAt = {};
   final Set<String> _serverNotFound = {};
   final Map<String, ChatState?> _chatStates = {};
+  final Map<String, String> _lastDisplayedMarkerIdByChat = {};
   String? _activeChatBareJid;
   void Function(List<ContactEntry> roster)? _rosterPersistor;
   void Function(List<ContactEntry> bookmarks)? _bookmarkPersistor;
@@ -339,8 +342,10 @@ class XmppService extends ChangeNotifier {
           _setupRoster();
           _setupChatManager();
           _setupMuc();
+          _setupMessageSignals();
           _setupPresence();
           _setupKeepalive();
+          _setupDeliveryTracking();
           _setupPep();
           _setupBookmarks();
           _primeMamSync();
@@ -401,6 +406,7 @@ class XmppService extends ChangeNotifier {
     if (bareJid != null && !isBookmark(bareJid)) {
       setMyChatState(bareJid, ChatState.ACTIVE);
       _requestMamBackfill(bareJid);
+      _sendDisplayedForChat(bareJid);
     }
     if (bareJid != null && isBookmark(bareJid)) {
       _ensureRoom(_bareJid(bareJid));
@@ -613,6 +619,41 @@ class XmppService extends ChangeNotifier {
     });
   }
 
+  void _setupMessageSignals() {
+    final connection = _connection;
+    if (connection == null) {
+      return;
+    }
+    final handler = MessageHandler.getInstance(connection);
+    _messageStanzaSubscription?.cancel();
+    _messageStanzaSubscription = handler.messagesStream.listen((stanza) {
+      if (stanza == null) {
+        return;
+      }
+      _handleMessageStanza(stanza);
+    });
+  }
+
+  void _setupDeliveryTracking() {
+    final connection = _connection;
+    if (connection == null) {
+      return;
+    }
+    final streamManagement = connection.streamManagementModule;
+    if (streamManagement == null) {
+      return;
+    }
+    _smDeliveredSubscription?.cancel();
+    _smDeliveredSubscription = streamManagement.deliveredStanzasStream.listen((stanza) {
+      if (stanza is MessageStanza && stanza.type == MessageStanzaType.CHAT) {
+        final id = stanza.id;
+        if (id != null && id.isNotEmpty) {
+          _applyAckByMessageId(id);
+        }
+      }
+    });
+  }
+
   void _setupMuc() {
     final connection = _connection;
     if (connection == null) {
@@ -667,6 +708,125 @@ class XmppService extends ChangeNotifier {
       _rooms[roomJid] = existing.copyWith(subject: subject.subject);
       notifyListeners();
     });
+  }
+
+  void _handleMessageStanza(MessageStanza stanza) {
+    if (stanza.type != MessageStanzaType.CHAT) {
+      return;
+    }
+    final fromBare = stanza.fromJid?.userAtDomain ?? '';
+    if (fromBare.isEmpty) {
+      return;
+    }
+    final receiptId = _extractReceiptsId(stanza);
+    if (receiptId != null) {
+      _applyReceipt(fromBare, receiptId);
+      return;
+    }
+    final displayedId = _extractMarkerId(stanza, 'displayed');
+    if (displayedId != null) {
+      _applyDisplayed(fromBare, displayedId);
+      return;
+    }
+    final body = stanza.body ?? '';
+    if (body.trim().isEmpty) {
+      return;
+    }
+    if (_isArchivedStanza(stanza)) {
+      return;
+    }
+    if (_currentUserBareJid != null && _bareJid(fromBare) == _currentUserBareJid) {
+      return;
+    }
+    final messageId = stanza.id;
+    if (messageId == null || messageId.isEmpty) {
+      return;
+    }
+    if (_hasReceiptRequest(stanza)) {
+      _sendReceipt(fromBare, messageId);
+    }
+    if (_hasMarkable(stanza)) {
+      _sendMarker(fromBare, messageId, 'received');
+      if (_activeChatBareJid != null &&
+          _bareJid(_activeChatBareJid!) == _bareJid(fromBare)) {
+        _sendMarker(fromBare, messageId, 'displayed');
+      }
+    }
+  }
+
+  bool _hasReceiptRequest(MessageStanza stanza) {
+    return _hasChildWithXmlns(stanza, 'request', 'urn:xmpp:receipts');
+  }
+
+  bool _hasMarkable(MessageStanza stanza) {
+    return _hasChildWithXmlns(stanza, 'markable', 'urn:xmpp:chat-markers:0');
+  }
+
+  String? _extractReceiptsId(MessageStanza stanza) {
+    final element = _findChildWithXmlns(stanza, 'received', 'urn:xmpp:receipts');
+    return element?.getAttribute('id')?.value;
+  }
+
+  String? _extractMarkerId(MessageStanza stanza, String name) {
+    final element = _findChildWithXmlns(stanza, name, 'urn:xmpp:chat-markers:0');
+    return element?.getAttribute('id')?.value;
+  }
+
+  bool _hasChildWithXmlns(XmppElement stanza, String name, String xmlns) {
+    return _findChildWithXmlns(stanza, name, xmlns) != null;
+  }
+
+  XmppElement? _findChildWithXmlns(XmppElement stanza, String name, String xmlns) {
+    for (final child in stanza.children) {
+      if (child.name == name && child.getAttribute('xmlns')?.value == xmlns) {
+        return child;
+      }
+    }
+    return null;
+  }
+
+  bool _isArchivedStanza(MessageStanza stanza) {
+    for (final child in stanza.children) {
+      if (child.name == 'result') {
+        return true;
+      }
+      if (child.name == 'delay' && child.getAttribute('xmlns')?.value == 'urn:xmpp:delay') {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void _sendReceipt(String toBareJid, String messageId) {
+    final connection = _connection;
+    if (connection == null) {
+      return;
+    }
+    final stanza =
+        MessageStanza(AbstractStanza.getRandomId(), MessageStanzaType.CHAT);
+    stanza.toJid = Jid.fromFullJid(toBareJid);
+    stanza.fromJid = connection.fullJid;
+    final receipt = XmppElement()..name = 'received';
+    receipt.addAttribute(XmppAttribute('xmlns', 'urn:xmpp:receipts'));
+    receipt.addAttribute(XmppAttribute('id', messageId));
+    stanza.addChild(receipt);
+    connection.writeStanza(stanza);
+  }
+
+  void _sendMarker(String toBareJid, String messageId, String name) {
+    final connection = _connection;
+    if (connection == null) {
+      return;
+    }
+    final stanza =
+        MessageStanza(AbstractStanza.getRandomId(), MessageStanzaType.CHAT);
+    stanza.toJid = Jid.fromFullJid(toBareJid);
+    stanza.fromJid = connection.fullJid;
+    final marker = XmppElement()..name = name;
+    marker.addAttribute(XmppAttribute('xmlns', 'urn:xmpp:chat-markers:0'));
+    marker.addAttribute(XmppAttribute('id', messageId));
+    stanza.addChild(marker);
+    connection.writeStanza(stanza);
   }
 
   void _setupPresence() {
@@ -925,6 +1085,9 @@ class XmppService extends ChangeNotifier {
             messageId: existing.messageId,
             mamId: nextMamId,
             stanzaId: nextStanzaId,
+            acked: existing.acked,
+            receiptReceived: existing.receiptReceived,
+            displayed: existing.displayed,
           );
           notifyListeners();
           _messagePersistor?.call(normalized, List.unmodifiable(list));
@@ -975,6 +1138,93 @@ class XmppService extends ChangeNotifier {
     _messagePersistor?.call(normalized, List.unmodifiable(list));
   }
 
+  void _applyAckByMessageId(String messageId) {
+    for (final entry in _messages.entries) {
+      final normalized = _bareJid(entry.key);
+      if (_updateOutgoingStatus(normalized, messageId, acked: true)) {
+        break;
+      }
+    }
+  }
+
+  void _applyReceipt(String bareJid, String messageId) {
+    final normalized = _bareJid(bareJid);
+    _updateOutgoingStatus(normalized, messageId, receiptReceived: true);
+  }
+
+  void _applyDisplayed(String bareJid, String messageId) {
+    final normalized = _bareJid(bareJid);
+    _updateOutgoingStatus(normalized, messageId, displayed: true);
+  }
+
+  bool _updateOutgoingStatus(
+    String bareJid,
+    String messageId, {
+    bool? acked,
+    bool? receiptReceived,
+    bool? displayed,
+  }) {
+    final list = _messages[bareJid];
+    if (list == null || list.isEmpty) {
+      return false;
+    }
+    for (var i = list.length - 1; i >= 0; i--) {
+      final existing = list[i];
+      if (!existing.outgoing || existing.messageId != messageId) {
+        continue;
+      }
+      final nextAcked = acked ?? existing.acked;
+      final nextReceipt = receiptReceived ?? existing.receiptReceived;
+      final nextDisplayed = displayed ?? existing.displayed;
+      if (nextAcked == existing.acked &&
+          nextReceipt == existing.receiptReceived &&
+          nextDisplayed == existing.displayed) {
+        return true;
+      }
+      list[i] = ChatMessage(
+        from: existing.from,
+        to: existing.to,
+        body: existing.body,
+        outgoing: existing.outgoing,
+        timestamp: existing.timestamp,
+        messageId: existing.messageId,
+        mamId: existing.mamId,
+        stanzaId: existing.stanzaId,
+        acked: nextAcked,
+        receiptReceived: nextReceipt,
+        displayed: nextDisplayed,
+      );
+      notifyListeners();
+      _messagePersistor?.call(bareJid, List.unmodifiable(list));
+      return true;
+    }
+    return false;
+  }
+
+  void _sendDisplayedForChat(String bareJid) {
+    if (_currentUserBareJid == null) {
+      return;
+    }
+    final normalized = _bareJid(bareJid);
+    final list = _messages[normalized];
+    if (list == null || list.isEmpty) {
+      return;
+    }
+    for (var i = list.length - 1; i >= 0; i--) {
+      final message = list[i];
+      if (message.outgoing || message.messageId == null || message.messageId!.isEmpty) {
+        continue;
+      }
+      final lastSent = _lastDisplayedMarkerIdByChat[normalized];
+      if (lastSent == message.messageId) {
+        return;
+      }
+      _lastDisplayedMarkerIdByChat[normalized] = message.messageId!;
+      _sendMarker(normalized, message.messageId!, 'displayed');
+      return;
+    }
+  }
+
   bool _mergeMamIdsIntoExisting(
     List<ChatMessage> list, {
     required String from,
@@ -1002,6 +1252,9 @@ class XmppService extends ChangeNotifier {
           messageId: existing.messageId,
           mamId: (mamId != null && mamId.isNotEmpty) ? mamId : existing.mamId,
           stanzaId: (stanzaId != null && stanzaId.isNotEmpty) ? stanzaId : existing.stanzaId,
+          acked: existing.acked,
+          receiptReceived: existing.receiptReceived,
+          displayed: existing.displayed,
         );
         return true;
       }
@@ -1026,6 +1279,9 @@ class XmppService extends ChangeNotifier {
         timestamp: existing.timestamp,
         mamId: (mamId != null && mamId.isNotEmpty) ? mamId : existing.mamId,
         stanzaId: (stanzaId != null && stanzaId.isNotEmpty) ? stanzaId : existing.stanzaId,
+        acked: existing.acked,
+        receiptReceived: existing.receiptReceived,
+        displayed: existing.displayed,
       );
       return true;
     }
@@ -1218,6 +1474,10 @@ class XmppService extends ChangeNotifier {
     _smNonzaSubscription = null;
     _pingSubscription?.cancel();
     _pingSubscription = null;
+    _messageStanzaSubscription?.cancel();
+    _messageStanzaSubscription = null;
+    _smDeliveredSubscription?.cancel();
+    _smDeliveredSubscription = null;
     _pepSubscription?.cancel();
     _pepSubscription = null;
     _pendingPings.clear();
@@ -1261,6 +1521,7 @@ class XmppService extends ChangeNotifier {
     _lastSeenAt.clear();
     _serverNotFound.clear();
     _chatStates.clear();
+    _lastDisplayedMarkerIdByChat.clear();
     _lastPingLatency = null;
     _lastPingAt = null;
     _carbonsEnabled = false;

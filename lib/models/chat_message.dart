@@ -8,6 +8,9 @@ class ChatMessage {
     this.messageId,
     this.mamId,
     this.stanzaId,
+    this.acked = false,
+    this.receiptReceived = false,
+    this.displayed = false,
   });
 
   final String from;
@@ -18,6 +21,9 @@ class ChatMessage {
   final String? messageId;
   final String? mamId;
   final String? stanzaId;
+  final bool acked;
+  final bool receiptReceived;
+  final bool displayed;
 
   Map<String, dynamic> toMap() {
     return {
@@ -29,6 +35,9 @@ class ChatMessage {
       'messageId': messageId,
       'mamId': mamId,
       'stanzaId': stanzaId,
+      'acked': acked,
+      'receiptReceived': receiptReceived,
+      'displayed': displayed,
     };
   }
 
@@ -44,6 +53,9 @@ class ChatMessage {
     final messageId = map['messageId']?.toString();
     final mamId = map['mamId']?.toString();
     final stanzaId = map['stanzaId']?.toString();
+    final acked = map['acked'] == true;
+    final receiptReceived = map['receiptReceived'] == true;
+    final displayed = map['displayed'] == true;
     if (from.isEmpty || to.isEmpty || body.isEmpty || ts.isEmpty) {
       return null;
     }
@@ -60,6 +72,9 @@ class ChatMessage {
       messageId: messageId,
       mamId: mamId,
       stanzaId: stanzaId,
+      acked: acked,
+      receiptReceived: receiptReceived,
+      displayed: displayed,
     );
   }
 }
