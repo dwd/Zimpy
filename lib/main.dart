@@ -186,6 +186,7 @@ class _ZimpyHomeState extends State<ZimpyHome> {
   bool _clearingCache = false;
   bool _rememberPassword = false;
   bool _useWebSocket = kIsWeb;
+  bool _useDirectTls = false;
   Timer? _typingDebounce;
   Timer? _idleTimer;
   ChatState? _lastSentChatState;
@@ -247,6 +248,7 @@ class _ZimpyHomeState extends State<ZimpyHome> {
         _portController.text = account.port.toString();
         _resourceController.text = account.resource;
         _useWebSocket = kIsWeb ? true : account.useWebSocket;
+        _useDirectTls = kIsWeb ? false : account.directTls;
         _wsEndpointController.text = account.wsEndpoint;
         if (account.wsProtocols.isNotEmpty) {
           _wsProtocolsController.text = account.wsProtocols.join(', ');
@@ -388,6 +390,24 @@ class _ZimpyHomeState extends State<ZimpyHome> {
                               ),
                             ),
                           ],
+                        ),
+                        const SizedBox(height: 12),
+                        CheckboxListTile(
+                          contentPadding: EdgeInsets.zero,
+                          dense: true,
+                          title: const Text('Direct TLS (XEP-0368)'),
+                          subtitle: const Text('Uses direct TLS when the server advertises it via SRV.'),
+                          value: _useDirectTls,
+                          onChanged: service.isConnecting || kIsWeb
+                              ? null
+                              : (value) {
+                                  if (value == null) {
+                                    return;
+                                  }
+                                  setState(() {
+                                    _useDirectTls = value;
+                                  });
+                                },
                         ),
                         const SizedBox(height: 12),
                         TextField(
@@ -964,6 +984,7 @@ class _ZimpyHomeState extends State<ZimpyHome> {
   void _handleConnect() {
     final port = int.tryParse(_portController.text.trim()) ?? 5222;
     final useWebSocket = kIsWeb || _useWebSocket;
+    final useDirectTls = kIsWeb ? false : _useDirectTls;
     final wsProtocols = _wsProtocolsController.text
         .split(',')
         .map((entry) => entry.trim())
@@ -977,6 +998,7 @@ class _ZimpyHomeState extends State<ZimpyHome> {
       resource: _resourceController.text.trim().isEmpty ? 'zimpy' : _resourceController.text.trim(),
       rememberPassword: _rememberPassword,
       useWebSocket: useWebSocket,
+      directTls: useDirectTls,
       wsEndpoint: _wsEndpointController.text.trim(),
       wsProtocols: wsProtocols,
     );
@@ -991,6 +1013,7 @@ class _ZimpyHomeState extends State<ZimpyHome> {
       host: account.host,
       port: port,
       useWebSocket: useWebSocket,
+      directTls: useDirectTls,
       wsEndpoint: account.wsEndpoint,
       wsProtocols: wsProtocols,
     );

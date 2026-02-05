@@ -1,6 +1,11 @@
 #include "flutter_window.h"
 
 #include <optional>
+#include <string>
+#include <vector>
+#include <windns.h>
+
+#include <flutter/standard_method_codec.h>
 
 #include "flutter/generated_plugin_registrant.h"
 
@@ -25,6 +30,69 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  auto messenger = flutter_controller_->engine()->messenger();
+  dns_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+      messenger, "zimpy/dns", &flutter::StandardMethodCodec::GetInstance());
+  dns_channel_->SetMethodCallHandler(
+      [](const auto& call, auto result) {
+        if (call.method_name() != "resolveSrv") {
+          result->NotImplemented();
+          return;
+        }
+        const auto* args = std::get_if<flutter::EncodableMap>(call.arguments());
+        if (!args) {
+          result->Success(flutter::EncodableValue(flutter::EncodableList()));
+          return;
+        }
+        auto name_it = args->find(flutter::EncodableValue("name"));
+        if (name_it == args->end() || !std::holds_alternative<std::string>(name_it->second)) {
+          result->Success(flutter::EncodableValue(flutter::EncodableList()));
+          return;
+        }
+        const std::string name = std::get<std::string>(name_it->second);
+        if (name.empty()) {
+          result->Success(flutter::EncodableValue(flutter::EncodableList()));
+          return;
+        }
+
+        std::wstring wide_name;
+        wide_name.assign(name.begin(), name.end());
+        DNS_RECORDW* records = nullptr;
+        const DNS_STATUS status = DnsQuery_W(
+            wide_name.c_str(), DNS_TYPE_SRV, DNS_QUERY_STANDARD, nullptr, &records, nullptr);
+        flutter::EncodableList list;
+        if (status == 0 && records != nullptr) {
+          for (DNS_RECORDW* rec = records; rec != nullptr; rec = rec->pNext) {
+            if (rec->wType != DNS_TYPE_SRV) {
+              continue;
+            }
+            const auto& srv = rec->Data.SRV;
+            if (srv.pNameTarget == nullptr) {
+              continue;
+            }
+            const int len = WideCharToMultiByte(CP_UTF8, 0, srv.pNameTarget, -1, nullptr, 0, nullptr, nullptr);
+            if (len <= 1) {
+              continue;
+            }
+            std::string target;
+            target.resize(len - 1);
+            WideCharToMultiByte(CP_UTF8, 0, srv.pNameTarget, -1, target.data(), len, nullptr, nullptr);
+            if (!target.empty() && target.back() == '.') {
+              target.pop_back();
+            }
+            flutter::EncodableMap entry;
+            entry[flutter::EncodableValue("host")] = flutter::EncodableValue(target);
+            entry[flutter::EncodableValue("port")] = flutter::EncodableValue(static_cast<int>(srv.wPort));
+            entry[flutter::EncodableValue("priority")] = flutter::EncodableValue(static_cast<int>(srv.wPriority));
+            entry[flutter::EncodableValue("weight")] = flutter::EncodableValue(static_cast<int>(srv.wWeight));
+            list.emplace_back(entry);
+          }
+        }
+        if (records != nullptr) {
+          DnsRecordListFree(records, DnsFreeRecordListDeep);
+        }
+        result->Success(flutter::EncodableValue(list));
+      });
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {

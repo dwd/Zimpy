@@ -215,6 +215,7 @@ class Connection {
         wsPath: account.wsPath,
         wsUri: wsUri,
         useWebSocket: useWebSocket,
+        directTls: account.directTls,
         map: prepareStreamResponse,
       )
           .then((socket) {
@@ -232,6 +233,7 @@ class Connection {
       });
     } catch (error) {
       Log.e(TAG, 'Socket Exception' + error.toString());
+      print('XMPP socket error: $error');
       handleConnectionError(error.toString());
     }
   }
@@ -470,6 +472,7 @@ class Connection {
 
   bool isTlsRequired() {
     if (account.useWebSocket ||
+        account.directTls ||
         account.wsUrl != null ||
         account.wsHost != null ||
         account.wsPath != null) {

@@ -7,6 +7,7 @@ class AccountRecord {
     required this.resource,
     required this.rememberPassword,
     required this.useWebSocket,
+    required this.directTls,
     required this.wsEndpoint,
     required this.wsProtocols,
   });
@@ -18,6 +19,7 @@ class AccountRecord {
   final String resource;
   final bool rememberPassword;
   final bool useWebSocket;
+  final bool directTls;
   final String wsEndpoint;
   final List<String> wsProtocols;
 
@@ -30,6 +32,7 @@ class AccountRecord {
       'resource': resource,
       'rememberPassword': rememberPassword,
       'useWebSocket': useWebSocket,
+      'directTls': directTls,
       'wsEndpoint': wsEndpoint,
       'wsProtocols': wsProtocols,
     };
@@ -46,6 +49,7 @@ class AccountRecord {
     final resource = map['resource']?.toString() ?? '';
     final rememberPasswordRaw = map['rememberPassword'];
     final useWebSocketRaw = map['useWebSocket'];
+    final directTlsRaw = map['directTls'];
     final wsEndpoint = map['wsEndpoint']?.toString() ?? '';
     final wsProtocolsRaw = map['wsProtocols'];
     final port = portRaw is int ? portRaw : int.tryParse(portRaw?.toString() ?? '') ?? 5222;
@@ -58,6 +62,7 @@ class AccountRecord {
     final useWebSocket = useWebSocketRaw is bool
         ? useWebSocketRaw
         : wsEndpoint.isNotEmpty;
+    final directTls = directTlsRaw is bool ? directTlsRaw : false;
     final wsProtocols = <String>[];
     if (wsProtocolsRaw is List) {
       for (final entry in wsProtocolsRaw) {
@@ -75,6 +80,7 @@ class AccountRecord {
       resource: resource,
       rememberPassword: rememberPassword,
       useWebSocket: useWebSocket,
+      directTls: directTls,
       wsEndpoint: wsEndpoint,
       wsProtocols: wsProtocols,
     );

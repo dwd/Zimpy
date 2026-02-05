@@ -9,6 +9,7 @@ class XmppAccountSettings {
   String? host;
   int port;
   bool useWebSocket = false;
+  bool directTls = false;
   String? wsUrl;
   String? wsHost;
   int? wsPort;
@@ -28,6 +29,7 @@ class XmppAccountSettings {
     this.host,
     this.resource,
     this.useWebSocket = false,
+    this.directTls = false,
     this.wsUrl,
     this.wsHost,
     this.wsPort,

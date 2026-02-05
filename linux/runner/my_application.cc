@@ -1,6 +1,9 @@
 #include "my_application.h"
 
 #include <flutter_linux/flutter_linux.h>
+#include <arpa/nameser.h>
+#include <resolv.h>
+#include <cstring>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>
 #endif
@@ -10,9 +13,72 @@
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
+  FlMethodChannel* dns_channel;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
+
+static void dns_channel_method_call_cb(FlMethodChannel* channel, FlMethodCall* method_call, gpointer user_data) {
+  const gchar* method = fl_method_call_get_name(method_call);
+  if (g_strcmp0(method, "resolveSrv") != 0) {
+    g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
+    fl_method_call_respond(method_call, response, nullptr);
+    return;
+  }
+  FlValue* args = fl_method_call_get_args(method_call);
+  FlValue* name_value = fl_value_lookup_string(args, "name");
+  if (name_value == nullptr || fl_value_get_type(name_value) != FL_VALUE_TYPE_STRING) {
+    g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_list()));
+    fl_method_call_respond(method_call, response, nullptr);
+    return;
+  }
+  const gchar* name = fl_value_get_string(name_value);
+  if (name == nullptr || name[0] == '\0') {
+    g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_list()));
+    fl_method_call_respond(method_call, response, nullptr);
+    return;
+  }
+
+  unsigned char answer[NS_PACKETSZ * 4];
+  int len = res_query(name, ns_c_in, ns_t_srv, answer, sizeof(answer));
+  FlValue* list = fl_value_new_list();
+  if (len > 0) {
+    ns_msg handle;
+    if (ns_initparse(answer, len, &handle) == 0) {
+      int count = ns_msg_count(handle, ns_s_an);
+      for (int i = 0; i < count; i++) {
+        ns_rr rr;
+        if (ns_parserr(&handle, ns_s_an, i, &rr) != 0) {
+          continue;
+        }
+        if (ns_rr_type(rr) != ns_t_srv) {
+          continue;
+        }
+        const unsigned char* rdata = ns_rr_rdata(rr);
+        int priority = ns_get16(rdata);
+        int weight = ns_get16(rdata + 2);
+        int port = ns_get16(rdata + 4);
+        char target[NS_MAXDNAME];
+        if (ns_name_uncompress(ns_msg_base(handle), ns_msg_end(handle), rdata + 6, target, sizeof(target)) < 0) {
+          continue;
+        }
+        size_t target_len = strlen(target);
+        if (target_len > 0 && target[target_len - 1] == '.') {
+          target[target_len - 1] = '\0';
+        }
+        FlValue* map = fl_value_new_map();
+        fl_value_set_string_take(map, "host", fl_value_new_string(target));
+        fl_value_set_string_take(map, "port", fl_value_new_int(port));
+        fl_value_set_string_take(map, "priority", fl_value_new_int(priority));
+        fl_value_set_string_take(map, "weight", fl_value_new_int(weight));
+        fl_value_append_take(list, map);
+      }
+    }
+  }
+
+  g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(fl_method_success_response_new(list));
+  fl_method_call_respond(method_call, response, nullptr);
+}
 
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView *view)
@@ -73,6 +139,14 @@ static void my_application_activate(GApplication* application) {
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
 
+  g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
+  FlMethodChannel* channel = fl_method_channel_new(
+      fl_engine_get_binary_messenger(fl_view_get_engine(view)),
+      "zimpy/dns",
+      FL_METHOD_CODEC(codec));
+  fl_method_channel_set_method_call_handler(channel, dns_channel_method_call_cb, nullptr, nullptr);
+  self->dns_channel = channel;
+
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
 
@@ -116,6 +190,7 @@ static void my_application_shutdown(GApplication* application) {
 // Implements GObject::dispose.
 static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
+  g_clear_object(&self->dns_channel);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }
@@ -128,7 +203,9 @@ static void my_application_class_init(MyApplicationClass* klass) {
   G_OBJECT_CLASS(klass)->dispose = my_application_dispose;
 }
 
-static void my_application_init(MyApplication* self) {}
+static void my_application_init(MyApplication* self) {
+  self->dns_channel = nullptr;
+}
 
 MyApplication* my_application_new() {
   // Set the program name to the application ID, which helps various systems

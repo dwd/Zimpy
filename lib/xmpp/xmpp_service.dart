@@ -10,6 +10,7 @@ import '../pep/pep_manager.dart';
 import '../pep/pep_caps_manager.dart';
 import '../storage/storage_service.dart';
 import 'ws_endpoint.dart';
+import 'srv_lookup.dart';
 
 enum XmppStatus {
   disconnected,
@@ -35,6 +36,8 @@ class XmppService extends ChangeNotifier {
   final Map<String, DateTime> _pendingPings = {};
   DateTime? _pendingSmAckAt;
   String? _carbonsRequestId;
+  DateTime? _lastSmAckRequestAt;
+  static const Duration _smAckInterval = Duration(minutes: 1);
   final Map<String, StreamSubscription<Message>> _chatMessageSubscriptions = {};
   final Map<String, StreamSubscription<ChatState?>> _chatStateSubscriptions = {};
 
@@ -276,6 +279,7 @@ class XmppService extends ChangeNotifier {
     String? host,
     required int port,
     bool useWebSocket = false,
+    bool directTls = false,
     String? wsEndpoint,
     List<String>? wsProtocols,
   }) async {
@@ -297,6 +301,20 @@ class XmppService extends ChangeNotifier {
 
     final bareJid = _bareJid(normalized);
     final fullJid = normalized.contains('/') ? normalized : '$bareJid/$resource';
+    var resolvedHost = host?.trim().isNotEmpty == true ? host!.trim() : '';
+    var resolvedPort = port;
+    var resolvedDirectTls = directTls;
+    if (!kIsWeb && resolvedHost.isEmpty) {
+      final domain = _domainFromBareJid(bareJid);
+      final srvTarget = await resolveXmppSrv(domain);
+      if (srvTarget != null) {
+        resolvedHost = srvTarget.host;
+        resolvedPort = srvTarget.port;
+        resolvedDirectTls = srvTarget.directTls;
+      } else if (resolvedPort == 0 || resolvedPort == 5222) {
+        resolvedPort = directTls ? 5223 : 5222;
+      }
+    }
 
     await _safeClose(preserveCache: true);
 
@@ -306,14 +324,15 @@ class XmppService extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final normalizedHost =
-          host?.trim().isNotEmpty == true ? host!.trim() : 'auto';
-      debugPrint('XMPP connect: bareJid=$bareJid host=$normalizedHost port=$port resource=$resource');
+      final normalizedHost = resolvedHost.isNotEmpty ? resolvedHost : 'auto';
+      debugPrint('XMPP TLS: directTls=$resolvedDirectTls useWebSocket=$shouldUseWebSocket');
+      debugPrint('XMPP connect: bareJid=$bareJid host=$normalizedHost port=$resolvedPort resource=$resource');
       final account = XmppAccountSettings.fromJid(fullJid, password);
-      account.host = host?.trim().isNotEmpty == true ? host!.trim() : null;
-      account.port = port;
+      account.host = resolvedHost.isNotEmpty ? resolvedHost : null;
+      account.port = resolvedPort;
       account.resource = resource;
       account.useWebSocket = shouldUseWebSocket;
+      account.directTls = resolvedDirectTls;
       if (wsConfig != null) {
         account.wsUrl = wsConfig.uri.toString();
         account.wsHost = wsConfig.host;
@@ -987,7 +1006,7 @@ class XmppService extends ChangeNotifier {
       }
     });
     if (_isStreamManagementEnabled()) {
-      _sendSmAckRequest();
+      _sendSmAckRequest(force: true);
     } else {
       _sendPing();
     }
@@ -1771,9 +1790,9 @@ class XmppService extends ChangeNotifier {
   }
 
   void _handleVcardPresenceUpdate(PresenceStanza stanza) {
-    final from = stanza.fromJid?.userAtDomain;
+    final bareJid = _vcardJidFromPresence(stanza);
     final storage = _storage;
-    if (from == null || from.isEmpty || storage == null) {
+    if (bareJid == null || bareJid.isEmpty || storage == null) {
       return;
     }
     final update = stanza.children.firstWhere(
@@ -1787,25 +1806,48 @@ class XmppService extends ChangeNotifier {
     }
     final photo = update.getChild('photo');
     final hash = photo?.textValue?.trim() ?? '';
-    final existing = _vcardAvatarState[from];
+    final existing = _vcardAvatarState[bareJid];
     if (hash.isEmpty) {
       if (existing != _vcardNoAvatar) {
-        _vcardAvatarState[from] = _vcardNoAvatar;
-        _vcardAvatarBytes.remove(from);
-        _vcardRequests.remove(from);
-        storage.storeVcardAvatarState(from, _vcardNoAvatar);
-        storage.removeVcardAvatar(from);
+        _vcardAvatarState[bareJid] = _vcardNoAvatar;
+        _vcardAvatarBytes.remove(bareJid);
+        _vcardRequests.remove(bareJid);
+        storage.storeVcardAvatarState(bareJid, _vcardNoAvatar);
+        storage.removeVcardAvatar(bareJid);
         notifyListeners();
       }
       return;
     }
-    if (existing == hash && _vcardAvatarBytes.containsKey(from)) {
+    if (existing == hash && _vcardAvatarBytes.containsKey(bareJid)) {
       return;
     }
-    _vcardAvatarState[from] = hash;
-    storage.storeVcardAvatarState(from, hash);
-    _vcardRequests.remove(from);
-    _requestVcardAvatar(from);
+    _vcardAvatarState[bareJid] = hash;
+    storage.storeVcardAvatarState(bareJid, hash);
+    _vcardRequests.remove(bareJid);
+    _requestVcardAvatar(bareJid);
+  }
+
+  String? _vcardJidFromPresence(PresenceStanza stanza) {
+    final from = stanza.fromJid;
+    if (from == null) {
+      return null;
+    }
+    XmppElement? mucUser;
+    for (final child in stanza.children) {
+      if (child.name == 'x' &&
+          child.getAttribute('xmlns')?.value == 'http://jabber.org/protocol/muc#user') {
+        mucUser = child;
+        break;
+      }
+    }
+    if (mucUser != null) {
+      final realJid = mucUser.getChild('item')?.getAttribute('jid')?.value;
+      if (realJid == null || realJid.isEmpty) {
+        return null;
+      }
+      return Jid.fromFullJid(realJid).userAtDomain;
+    }
+    return from.userAtDomain;
   }
 
   void _sendPing() {
@@ -1827,10 +1869,16 @@ class XmppService extends ChangeNotifier {
     connection.writeStanza(stanza);
   }
 
-  void _sendSmAckRequest() {
+  void _sendSmAckRequest({bool force = false}) {
     final connection = _connection;
     if (connection == null || !_isStreamManagementEnabled()) {
       return;
+    }
+    if (!force && _lastSmAckRequestAt != null) {
+      final elapsed = DateTime.now().difference(_lastSmAckRequestAt!);
+      if (elapsed < _smAckInterval) {
+        return;
+      }
     }
     if (_pendingSmAckAt != null) {
       _expireSmAck();
@@ -1839,6 +1887,7 @@ class XmppService extends ChangeNotifier {
       }
     }
     _pendingSmAckAt = DateTime.now();
+    _lastSmAckRequestAt = _pendingSmAckAt;
     connection.streamManagementModule?.sendAckRequest();
   }
 

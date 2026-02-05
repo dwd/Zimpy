@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:universal_io/io.dart';
+import 'package:flutter/foundation.dart';
 
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:xmpp_stone/src/connection/XmppWebsocketApi.dart';
+import 'package:xmpp_stone/src/logger/Log.dart';
 
 export 'XmppWebsocketApi.dart';
 
@@ -30,8 +32,13 @@ class XmppWebSocketIo extends XmppWebSocket {
       List<String>? wsProtocols,
       String? wsPath,
       Uri? wsUri,
-      bool useWebSocket = false}) async {
+      bool useWebSocket = false,
+      bool directTls = false}) async {
     _useWebSocket = useWebSocket || wsUri != null || wsPath != null;
+    Log.i(TAG,
+        'Socket connect: host=$host port=$port useWebSocket=$_useWebSocket directTls=$directTls');
+    debugPrint(
+        'XMPP socket: host=$host port=$port useWebSocket=$_useWebSocket directTls=$directTls');
     if (_useWebSocket) {
       final uri = wsUri ??
           Uri(
@@ -40,11 +47,23 @@ class XmppWebSocketIo extends XmppWebSocket {
             port: port,
             path: wsPath,
           );
+      Log.i(TAG, 'WebSocket URI: $uri');
+      debugPrint('XMPP socket: WebSocket URI=$uri');
       _webSocket = WebSocketChannel.connect(uri, protocols: wsProtocols);
     } else {
-      await Socket.connect(host, port).then((Socket socket) {
-        _tcpSocket = socket;
-      });
+      if (directTls) {
+        Log.i(TAG, 'Direct TLS: SecureSocket.connect');
+        debugPrint('XMPP socket: Direct TLS SecureSocket.connect');
+        await SecureSocket.connect(host, port).then((Socket socket) {
+          _tcpSocket = socket;
+        });
+      } else {
+        Log.i(TAG, 'Plain TCP: Socket.connect');
+        debugPrint('XMPP socket: Plain TCP Socket.connect');
+        await Socket.connect(host, port).then((Socket socket) {
+          _tcpSocket = socket;
+        });
+      }
     }
 
     if (map != null) {
@@ -100,6 +119,8 @@ class XmppWebSocketIo extends XmppWebSocket {
     if (_useWebSocket) {
       return Future.value(null);
     }
+    Log.i(TAG, 'StartTLS: SecureSocket.secure');
+    debugPrint('XMPP socket: StartTLS SecureSocket.secure');
     return SecureSocket.secure(_tcpSocket!, onBadCertificate: onBadCertificate)
         .then((secureSocket) {
       if (secureSocket != null) {

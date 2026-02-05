@@ -15,7 +15,8 @@ abstract class XmppWebSocket extends Stream<String> {
       List<String>? wsProtocols,
       String? wsPath,
       Uri? wsUri,
-      bool useWebSocket = false});
+      bool useWebSocket = false,
+      bool directTls = false});
 
   void write(Object? message);
 
