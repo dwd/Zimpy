@@ -73,17 +73,18 @@ class AppDelegate: FlutterAppDelegate {
     }
   }
 
-  private static func parseSrvRecord(rdata: UnsafePointer<UInt8>, length: Int) -> [String: Any]? {
+  private static func parseSrvRecord(rdata: UnsafeRawPointer, length: Int) -> [String: Any]? {
     if length < 7 {
       return nil
     }
-    let priority = Int(rdata[0]) << 8 | Int(rdata[1])
-    let weight = Int(rdata[2]) << 8 | Int(rdata[3])
-    let port = Int(rdata[4]) << 8 | Int(rdata[5])
+    let bytes = rdata.bindMemory(to: UInt8.self, capacity: length)
+    let priority = Int(bytes[0]) << 8 | Int(bytes[1])
+    let weight = Int(bytes[2]) << 8 | Int(bytes[3])
+    let port = Int(bytes[4]) << 8 | Int(bytes[5])
     var offset = 6
     var labels = [String]()
     while offset < length {
-      let labelLength = Int(rdata[offset])
+      let labelLength = Int(bytes[offset])
       if labelLength == 0 {
         break
       }
@@ -92,8 +93,8 @@ class AppDelegate: FlutterAppDelegate {
       if end > length {
         break
       }
-      let bytes = Array(UnsafeBufferPointer(start: rdata + start, count: labelLength))
-      labels.append(String(bytes: bytes, encoding: .utf8) ?? "")
+      let labelBytes = Array(UnsafeBufferPointer(start: bytes + start, count: labelLength))
+      labels.append(String(bytes: labelBytes, encoding: .utf8) ?? "")
       offset = end
     }
     let host = labels.joined(separator: ".")
