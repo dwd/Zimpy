@@ -21,3 +21,5 @@ server support and TLS-first connections.
 
 - `xmpp_stone` is vendored locally in `vendor/xmpp_stone` to enforce StartTLS
   and surface XML traffic during debugging.
+- macOS builds that use `flutter_secure_storage` require the `keychain-access-groups`
+  entitlement (not `com.apple.security.keychain-access-groups`) to avoid `-34018`.
