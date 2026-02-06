@@ -18,6 +18,15 @@ struct _MyApplication {
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 
+static gboolean on_window_delete(GtkWidget* widget, GdkEvent* event, gpointer user_data) {
+  (void)event;
+  (void)user_data;
+  if (GTK_IS_WINDOW(widget)) {
+    gtk_window_iconify(GTK_WINDOW(widget));
+  }
+  return TRUE;
+}
+
 static void dns_channel_method_call_cb(FlMethodChannel* channel, FlMethodCall* method_call, gpointer user_data) {
   const gchar* method = fl_method_call_get_name(method_call);
   if (g_strcmp0(method, "resolveSrv") != 0) {
@@ -91,6 +100,7 @@ static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
+  g_signal_connect(window, "delete-event", G_CALLBACK(on_window_delete), nullptr);
 
   // Use a header bar when running in GNOME as this is the common style used
   // by applications and is the setup most users will be using (e.g. Ubuntu

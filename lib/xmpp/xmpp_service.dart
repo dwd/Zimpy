@@ -58,6 +58,8 @@ class XmppService extends ChangeNotifier {
   final Map<String, ChatState?> _chatStates = {};
   final Map<String, String> _lastDisplayedMarkerIdByChat = {};
   String? _activeChatBareJid;
+  void Function(String bareJid, ChatMessage message)? _incomingMessageHandler;
+  void Function(String roomJid, ChatMessage message)? _incomingRoomMessageHandler;
   void Function(List<ContactEntry> roster)? _rosterPersistor;
   void Function(List<ContactEntry> bookmarks)? _bookmarkPersistor;
   void Function(String bareJid, List<ChatMessage> messages)? _messagePersistor;
@@ -437,6 +439,16 @@ class XmppService extends ChangeNotifier {
     _rosterPersistor = persistor;
   }
 
+  void setIncomingMessageHandler(
+      void Function(String bareJid, ChatMessage message)? handler) {
+    _incomingMessageHandler = handler;
+  }
+
+  void setIncomingRoomMessageHandler(
+      void Function(String roomJid, ChatMessage message)? handler) {
+    _incomingRoomMessageHandler = handler;
+  }
+
   void setBookmarkPersistor(void Function(List<ContactEntry> bookmarks)? persistor) {
     _bookmarkPersistor = persistor;
   }
@@ -691,15 +703,17 @@ class XmppService extends ChangeNotifier {
           return;
         }
       }
-      list.add(ChatMessage(
+      final newMessage = ChatMessage(
         from: message.nick,
         to: roomJid,
         body: message.body,
         outgoing: false,
         timestamp: message.timestamp,
         messageId: messageId,
-      ));
+      );
+      _insertMessageOrdered(list, newMessage);
       notifyListeners();
+      _incomingRoomMessageHandler?.call(roomJid, newMessage);
     });
     _roomSubscriptions['presence']?.cancel();
     _roomSubscriptions['presence'] =
@@ -1140,7 +1154,7 @@ class XmppService extends ChangeNotifier {
         return;
       }
     }
-    list.add(ChatMessage(
+    final newMessage = ChatMessage(
       from: from,
       to: to,
       body: body,
@@ -1149,12 +1163,16 @@ class XmppService extends ChangeNotifier {
       messageId: messageId,
       mamId: mamId,
       stanzaId: stanzaId,
-    ));
+    );
+    _insertMessageOrdered(list, newMessage);
     if (!outgoing) {
       _lastSeenAt[normalized] ??= timestamp;
     }
     notifyListeners();
     _messagePersistor?.call(normalized, List.unmodifiable(list));
+    if (!outgoing && (mamId == null || mamId.isEmpty)) {
+      _incomingMessageHandler?.call(normalized, newMessage);
+    }
   }
 
   void _applyAckByMessageId(String messageId) {
@@ -1174,6 +1192,24 @@ class XmppService extends ChangeNotifier {
   void _applyDisplayed(String bareJid, String messageId) {
     final normalized = _bareJid(bareJid);
     _updateOutgoingStatus(normalized, messageId, displayed: true);
+  }
+
+  void _insertMessageOrdered(List<ChatMessage> list, ChatMessage message) {
+    if (list.isEmpty) {
+      list.add(message);
+      return;
+    }
+    final first = list.first;
+    if (message.timestamp.isBefore(first.timestamp)) {
+      list.insert(0, message);
+      return;
+    }
+    // Keep MAM order intact by appending when not strictly older than the first entry.
+    if (!message.timestamp.isBefore(list.last.timestamp)) {
+      list.add(message);
+      return;
+    }
+    list.add(message);
   }
 
   bool _updateOutgoingStatus(

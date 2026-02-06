@@ -33,7 +33,8 @@ class XmppWebSocketIo extends XmppWebSocket {
       String? wsPath,
       Uri? wsUri,
       bool useWebSocket = false,
-      bool directTls = false}) async {
+      bool directTls = false,
+      String? tlsHost}) async {
     _useWebSocket = useWebSocket || wsUri != null || wsPath != null;
     Log.i(TAG,
         'Socket connect: host=$host port=$port useWebSocket=$_useWebSocket directTls=$directTls');
@@ -54,9 +55,8 @@ class XmppWebSocketIo extends XmppWebSocket {
       if (directTls) {
         Log.i(TAG, 'Direct TLS: SecureSocket.connect');
         debugPrint('XMPP socket: Direct TLS SecureSocket.connect');
-        await SecureSocket.connect(host, port).then((Socket socket) {
-          _tcpSocket = socket;
-        });
+        final rawSocket = await Socket.connect(host, port);
+        _tcpSocket = await SecureSocket.secure(rawSocket, host: tlsHost ?? host);
       } else {
         Log.i(TAG, 'Plain TCP: Socket.connect');
         debugPrint('XMPP socket: Plain TCP Socket.connect');

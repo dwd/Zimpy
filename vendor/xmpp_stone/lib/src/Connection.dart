@@ -216,6 +216,7 @@ class Connection {
         wsUri: wsUri,
         useWebSocket: useWebSocket,
         directTls: account.directTls,
+        tlsHost: account.domain,
         map: prepareStreamResponse,
       )
           .then((socket) {
@@ -414,7 +415,7 @@ class Connection {
     print('XMPP StartTLS: securing socket');
 
     _socket!
-        .secure(onBadCertificate: _validateBadCertificate)
+        .secure(host: account.domain, onBadCertificate: _validateBadCertificate)
         .then((secureSocket) {
       if (secureSocket == null) return;
 

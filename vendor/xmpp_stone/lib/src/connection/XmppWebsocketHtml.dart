@@ -31,7 +31,8 @@ class XmppWebSocketHtml extends XmppWebSocket {
       String? wsPath,
       Uri? wsUri,
       bool useWebSocket = true,
-      bool directTls = false}) {
+      bool directTls = false,
+      String? tlsHost}) {
     final uri = wsUri ??
         Uri(
           scheme: 'wss',

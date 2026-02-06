@@ -78,7 +78,7 @@ class AppDelegate: FlutterAppDelegate {
   private let channelName = "wimsy/dns"
 
   override func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-    return true
+    return false
   }
 
   override func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {

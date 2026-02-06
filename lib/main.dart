@@ -1,13 +1,16 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xmpp_stone/xmpp_stone.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'models/chat_message.dart';
 import 'models/room_entry.dart';
+import 'notifications/notification_service.dart';
 import 'storage/account_record.dart';
 import 'storage/storage_service.dart';
 import 'xmpp/xmpp_service.dart';
@@ -26,22 +29,74 @@ class WimsyApp extends StatefulWidget {
   State<WimsyApp> createState() => _WimsyAppState();
 }
 
-class _WimsyAppState extends State<WimsyApp> {
+class _WimsyAppState extends State<WimsyApp> with WidgetsBindingObserver {
   final XmppService _service = XmppService();
   final StorageService _storage = StorageService();
+  final NotificationService _notifications = NotificationService();
+  bool _appIsForeground = true;
   late final Future<void> _initFuture;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _notifications.initialize();
+    _service.setIncomingMessageHandler(_handleIncomingMessage);
+    _service.setIncomingRoomMessageHandler(_handleIncomingRoomMessage);
     _initFuture = _storage.initialize();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _service.dispose();
     _storage.lock();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appIsForeground = state == AppLifecycleState.resumed;
+  }
+
+  void _handleIncomingMessage(String bareJid, ChatMessage message) {
+    if (!_shouldNotifyFor(bareJid)) {
+      return;
+    }
+    final title = _service.displayNameFor(bareJid);
+    _notifications.showMessage(
+      id: DateTime.now().millisecondsSinceEpoch.remainder(1 << 31),
+      title: title,
+      body: message.body,
+      tag: bareJid,
+    );
+  }
+
+  void _handleIncomingRoomMessage(String roomJid, ChatMessage message) {
+    if (!_shouldNotifyFor(roomJid)) {
+      return;
+    }
+    final title = '${roomJid} • ${message.from}';
+    _notifications.showMessage(
+      id: DateTime.now().millisecondsSinceEpoch.remainder(1 << 31),
+      title: title,
+      body: message.body,
+      tag: roomJid,
+    );
+  }
+
+  bool _shouldNotifyFor(String bareJid) {
+    if (kIsWeb) {
+      return false;
+    }
+    if (!_appIsForeground) {
+      return true;
+    }
+    final activeChat = _service.activeChatBareJid;
+    if (activeChat == null) {
+      return true;
+    }
+    return activeChat != bareJid;
   }
 
   @override
@@ -182,6 +237,7 @@ class _WimsyHomeState extends State<WimsyHome> {
   final TextEditingController _messageController = TextEditingController();
   final FocusNode _messageFocusNode = FocusNode();
   final ScrollController _messageScrollController = ScrollController();
+  final Map<String, DateTime> _lastReadAtByChat = {};
   bool _loadedAccount = false;
   bool _clearingCache = false;
   bool _rememberPassword = false;
@@ -532,14 +588,10 @@ class _WimsyHomeState extends State<WimsyHome> {
           appBar: AppBar(
             title: Text('Signed in as ${service.currentUserBareJid ?? ''}'),
             actions: [
-              _PresenceMenu(service: service),
-              TextButton(
-                onPressed: _clearingCache ? null : _confirmClearCache,
-                child: const Text('Clear cache'),
-              ),
-              TextButton(
-                onPressed: service.disconnect,
-                child: const Text('Disconnect'),
+              _PresenceMenu(
+                service: service,
+                onClearCacheExit: _clearingCache ? null : _confirmClearCacheAndExit,
+                onExit: _handleExit,
               ),
               const SizedBox(width: 12),
             ],
@@ -641,12 +693,25 @@ class _WimsyHomeState extends State<WimsyHome> {
                         final effectiveStatusText =
                             statusText != null && statusText.toLowerCase() == 'unavailable'
                                 ? null
-                                : statusText;
+                            : statusText;
                         final show = (statusText != null && statusText.toLowerCase() == 'unavailable')
                             ? null
                             : (presence?.showElement ?? (presence != null ? PresenceShowElement.CHAT : null));
                         final dotColor = _presenceDotColor(theme, show);
                         final avatarBytes = service.avatarBytesFor(jid);
+                        final messages = isBookmark
+                            ? service.roomMessagesFor(jid)
+                            : service.messagesFor(jid);
+                        DateTime? lastIncomingTime;
+                        for (var i = messages.length - 1; i >= 0; i--) {
+                          if (!messages[i].outgoing) {
+                            lastIncomingTime = messages[i].timestamp;
+                            break;
+                          }
+                        }
+                        final lastReadAt = _lastReadAtByChat[jid];
+                        final isUnread = lastIncomingTime != null &&
+                            (lastReadAt == null || lastIncomingTime.isAfter(lastReadAt));
                         final bookmarkStatusText = contact.bookmarkNick?.isNotEmpty == true
                             ? 'Nickname: ${contact.bookmarkNick}'
                             : (contact.bookmarkAutoJoin ? 'Auto-join room' : 'Room bookmark');
@@ -714,7 +779,9 @@ class _WimsyHomeState extends State<WimsyHome> {
                                             Flexible(
                                               child: Text(
                                                 contact.displayName,
-                                                style: theme.textTheme.titleMedium,
+                                                style: theme.textTheme.titleMedium?.copyWith(
+                                                  fontWeight: isUnread ? FontWeight.w600 : null,
+                                                ),
                                                 overflow: TextOverflow.ellipsis,
                                               ),
                                             ),
@@ -811,12 +878,16 @@ class _WimsyHomeState extends State<WimsyHome> {
             : service.messagesFor(activeChat);
     final roomEntry = activeChat == null ? null : service.roomFor(activeChat);
     _handleAutoScroll(messages.length);
+    if (activeChat != null) {
+      _markChatRead(activeChat, messages);
+    }
     if (activeChat == null) {
       _lastFocusedChat = null;
       _lastMessageCount = 0;
     } else if (activeChat != _lastFocusedChat) {
       _lastFocusedChat = activeChat;
       _lastMessageCount = messages.length;
+      _markChatRead(activeChat, messages);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           if (!isBookmark) {
@@ -1059,6 +1130,32 @@ class _WimsyHomeState extends State<WimsyHome> {
     });
   }
 
+  void _markChatRead(String bareJid, List<ChatMessage> messages) {
+    if (messages.isEmpty) {
+      return;
+    }
+    _lastReadAtByChat[bareJid] = messages.last.timestamp;
+  }
+
+  Future<void> _confirmClearCacheAndExit() async {
+    final cleared = await _confirmClearCache();
+    if (mounted && cleared) {
+      _handleExit();
+    }
+  }
+
+  void _handleExit() {
+    widget.service.disconnect();
+    if (kIsWeb) {
+      return;
+    }
+    if (Platform.isAndroid) {
+      SystemNavigator.pop();
+    } else {
+      exit(0);
+    }
+  }
+
   void _setChatState(String bareJid, ChatState state) {
     if (_lastSentChatState == state) {
       return;
@@ -1105,7 +1202,7 @@ class _WimsyHomeState extends State<WimsyHome> {
     );
   }
 
-  Future<void> _confirmClearCache() async {
+  Future<bool> _confirmClearCache() async {
     final shouldClear = await showDialog<bool>(
       context: context,
       builder: (context) {
@@ -1126,7 +1223,7 @@ class _WimsyHomeState extends State<WimsyHome> {
       },
     );
     if (shouldClear != true) {
-      return;
+      return false;
     }
     setState(() => _clearingCache = true);
     await widget.storage.clearRoster();
@@ -1138,6 +1235,7 @@ class _WimsyHomeState extends State<WimsyHome> {
     if (mounted) {
       setState(() => _clearingCache = false);
     }
+    return true;
   }
 }
 
@@ -1372,18 +1470,29 @@ Color _presenceDotColor(ThemeData theme, PresenceShowElement? show) {
 }
 
 class _PresenceMenu extends StatelessWidget {
-  const _PresenceMenu({required this.service});
+  const _PresenceMenu({
+    required this.service,
+    required this.onClearCacheExit,
+    required this.onExit,
+  });
 
   final XmppService service;
+  final VoidCallback? onClearCacheExit;
+  final VoidCallback onExit;
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final isOnline = service.isConnected;
     final latencyMs = service.lastPingLatency?.inMilliseconds;
     final latencyLabel = latencyMs == null ? '--' : '$latencyMs ms';
+    final dotColor = _presenceDotColor(
+      theme,
+      service.selfPresence.showElement ?? (service.isConnected ? PresenceShowElement.CHAT : null),
+    );
     return PopupMenuButton<_PresenceAction>(
       tooltip: 'Set presence',
-      icon: const Icon(Icons.circle_outlined),
+      icon: Icon(Icons.circle, color: dotColor),
       onSelected: (action) async {
         switch (action) {
           case _PresenceAction.online:
@@ -1404,6 +1513,12 @@ class _PresenceMenu extends StatelessWidget {
               service.setSelfPresence(show: service.selfPresence.showElement ?? PresenceShowElement.CHAT, status: status);
             }
             break;
+          case _PresenceAction.clearCacheExit:
+            onClearCacheExit?.call();
+            break;
+          case _PresenceAction.exit:
+            onExit();
+            break;
         }
       },
       itemBuilder: (context) => [
@@ -1422,12 +1537,19 @@ class _PresenceMenu extends StatelessWidget {
         const PopupMenuItem(value: _PresenceAction.xa, child: Text('Extended away')),
         const PopupMenuDivider(),
         const PopupMenuItem(value: _PresenceAction.setStatus, child: Text('Set status message...')),
+        const PopupMenuDivider(),
+        PopupMenuItem(
+          enabled: onClearCacheExit != null,
+          value: _PresenceAction.clearCacheExit,
+          child: const Text('Clear Cache & Exit'),
+        ),
+        const PopupMenuItem(value: _PresenceAction.exit, child: Text('Exit')),
       ],
     );
   }
 }
 
-enum _PresenceAction { online, away, dnd, xa, setStatus }
+enum _PresenceAction { online, away, dnd, xa, setStatus, clearCacheExit, exit }
 
 Future<String?> _promptStatus(BuildContext context, String current) async {
   final controller = TextEditingController(text: current);
