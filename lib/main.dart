@@ -76,7 +76,7 @@ class _WimsyAppState extends State<WimsyApp> with WidgetsBindingObserver {
     if (!_shouldNotifyFor(roomJid)) {
       return;
     }
-    final title = '${roomJid} • ${message.from}';
+    final title = '$roomJid • ${message.from}';
     _notifications.showMessage(
       id: DateTime.now().millisecondsSinceEpoch.remainder(1 << 31),
       title: title,

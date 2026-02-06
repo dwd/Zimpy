@@ -5,17 +5,18 @@ server support and TLS-first connections.
 
 ## Features
 
-- Connect to modern XMPP servers over StartTLS
-- Login with full JID + resource
+- Direct TLS (XEP-0368) and StartTLS support with SRV discovery
+- Login with full JID + resource (custom host/port supported)
 - Roster sync and manual JID chat creation
-- One-to-one chat view with message history per contact
-- Basic presence announcement on connect
+- One-to-one chat view with message history per contact (MAM-aware backfill)
+- Multi-User Chat bookmarks and join/leave
+- Presence state + custom status message
+- Native notifications for incoming messages (desktop + Android)
 - Console protocol traces for send/receive (when enabled)
 
 ## Platform Support
 
-- Linux, macOS, Windows, Android, iOS
-- Web is not supported (socket transport is required)
+- Linux, macOS, Windows, Android, iOS, Web
 
 ## Notes
 
