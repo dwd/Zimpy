@@ -39,8 +39,6 @@ class Log {
     if (logXmpp) {
       log('---Xmpp Receiving:---');
       log('$message');
-      print('---Xmpp Receiving:---');
-      print(message);
     }
   }
 
@@ -48,8 +46,6 @@ class Log {
     if (logXmpp) {
       log('---Xmpp Sending:---');
       log('$message');
-      print('---Xmpp Sending:---');
-      print(message);
     }
   }
 
