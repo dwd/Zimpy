@@ -1034,6 +1034,9 @@ class _WimsyHomeState extends State<WimsyHome> {
       widget.service.sendMessage(toBareJid: activeChat, text: text);
       _setChatState(activeChat, ChatState.ACTIVE);
     }
+    if (_messageFocusNode.canRequestFocus) {
+      _messageFocusNode.requestFocus();
+    }
   }
 
   void _handleTypingState(XmppService service, String activeChat, String value) {
