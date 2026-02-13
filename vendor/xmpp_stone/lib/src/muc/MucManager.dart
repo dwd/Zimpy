@@ -102,11 +102,15 @@ class MucManager {
         _extractDelayedTimestamp(forwardedMessage) ??
         _extractDelayedTimestamp(stanza) ??
         DateTime.now();
+    final mamResultId = result?.getAttribute('id')?.value;
+    final forwardedStanzaId =
+        forwardedMessage?.getChild('stanza-id')?.getAttribute('id')?.value;
     _messageController.add(MucMessage(
       roomJid: roomJid,
       nick: nick ?? '',
       body: body,
-      stanzaId: stanza.id,
+      mamResultId: mamResultId,
+      stanzaId: forwardedStanzaId ?? stanza.id,
       timestamp: timestamp,
     ));
   }
@@ -179,6 +183,7 @@ class MucMessage {
     required this.nick,
     required this.body,
     required this.timestamp,
+    this.mamResultId,
     this.stanzaId,
   });
 
@@ -186,6 +191,7 @@ class MucMessage {
   final String nick;
   final String body;
   final DateTime timestamp;
+  final String? mamResultId;
   final String? stanzaId;
 }
 

@@ -1247,6 +1247,12 @@ class _WimsyHomeState extends State<WimsyHome> {
     }
     final position = _messageScrollController.position;
     _wasAtBottom = position.pixels >= (position.maxScrollExtent - 48);
+    if (position.pixels <= 24) {
+      final activeChat = widget.service.activeChatBareJid;
+      if (activeChat != null) {
+        widget.service.requestOlderMessages(activeChat);
+      }
+    }
   }
 
   void _scrollToBottom() {
