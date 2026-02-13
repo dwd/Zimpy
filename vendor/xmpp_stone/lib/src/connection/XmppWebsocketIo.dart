@@ -1,8 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:universal_io/io.dart';
-import 'package:flutter/foundation.dart';
-
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:xmpp_stone/src/connection/XmppWebsocketApi.dart';
 import 'package:xmpp_stone/src/logger/Log.dart';
@@ -38,8 +36,6 @@ class XmppWebSocketIo extends XmppWebSocket {
     _useWebSocket = useWebSocket || wsUri != null || wsPath != null;
     Log.i(TAG,
         'Socket connect: host=$host port=$port useWebSocket=$_useWebSocket directTls=$directTls');
-    debugPrint(
-        'XMPP socket: host=$host port=$port useWebSocket=$_useWebSocket directTls=$directTls');
     if (_useWebSocket) {
       final uri = wsUri ??
           Uri(
@@ -49,17 +45,14 @@ class XmppWebSocketIo extends XmppWebSocket {
             path: wsPath,
           );
       Log.i(TAG, 'WebSocket URI: $uri');
-      debugPrint('XMPP socket: WebSocket URI=$uri');
       _webSocket = WebSocketChannel.connect(uri, protocols: wsProtocols);
     } else {
       if (directTls) {
         Log.i(TAG, 'Direct TLS: SecureSocket.connect');
-        debugPrint('XMPP socket: Direct TLS SecureSocket.connect');
         final rawSocket = await Socket.connect(host, port);
         _tcpSocket = await SecureSocket.secure(rawSocket, host: tlsHost ?? host);
       } else {
         Log.i(TAG, 'Plain TCP: Socket.connect');
-        debugPrint('XMPP socket: Plain TCP Socket.connect');
         await Socket.connect(host, port).then((Socket socket) {
           _tcpSocket = socket;
         });
@@ -120,7 +113,6 @@ class XmppWebSocketIo extends XmppWebSocket {
       return Future.value(null);
     }
     Log.i(TAG, 'StartTLS: SecureSocket.secure');
-    debugPrint('XMPP socket: StartTLS SecureSocket.secure');
     return SecureSocket.secure(_tcpSocket!, onBadCertificate: onBadCertificate)
         .then((secureSocket) {
       if (secureSocket != null) {
