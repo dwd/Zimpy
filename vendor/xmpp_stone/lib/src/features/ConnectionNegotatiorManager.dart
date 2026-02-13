@@ -40,8 +40,7 @@ class ConnectionNegotiatorManager {
 
   void negotiateFeatureList(xml.XmlElement element) {
     Log.d(TAG, 'Negotiating features');
-    var nonzas =
-        element.childElements.map((element) => Nonza.parse(element)).toList();
+    var nonzas = parseFeatureNonzas(element);
     supportedNegotiatorList.forEach((negotiator) {
       var matchingNonzas = negotiator.match(nonzas);
       if (matchingNonzas != null && matchingNonzas.isNotEmpty) {
@@ -147,6 +146,10 @@ class ConnectionNegotiatorManager {
             .add(NegotiatorWithSupportedNonzas(negotiator, matchingNonzas));
       }
     });
+  }
+
+  static List<Nonza> parseFeatureNonzas(xml.XmlElement element) {
+    return element.childElements.map((child) => Nonza.parse(child)).toList();
   }
 }
 

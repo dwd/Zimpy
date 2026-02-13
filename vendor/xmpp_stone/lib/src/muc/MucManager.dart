@@ -80,39 +80,17 @@ class MucManager {
   }
 
   void _handleGroupMessage(MessageStanza stanza) {
-    final result = stanza.children.firstWhereOrNull((child) => child.name == 'result');
-    final forwarded = result?.getChild('forwarded');
-    final forwardedMessage = forwarded?.getChild('message');
-    final from = _parseForwardedFrom(forwardedMessage) ?? stanza.fromJid;
-    if (from == null) {
+    final parsed = parseMucGroupMessage(stanza);
+    if (parsed == null) {
       return;
     }
-    final roomJid = from.userAtDomain;
-    final nick = from.resource;
-    final body = _extractForwardedBody(forwardedMessage) ?? stanza.body ?? '';
-    final subject = _extractForwardedSubject(forwardedMessage) ?? stanza.subject;
-    if (subject != null && subject.isNotEmpty && body.trim().isEmpty) {
-      _subjectController.add(MucSubjectUpdate(roomJid: roomJid, subject: subject));
+    if (parsed.subject != null) {
+      _subjectController.add(parsed.subject!);
       return;
     }
-    if (body.trim().isEmpty) {
-      return;
+    if (parsed.message != null) {
+      _messageController.add(parsed.message!);
     }
-    final timestamp = _extractDelayedTimestamp(forwarded) ??
-        _extractDelayedTimestamp(forwardedMessage) ??
-        _extractDelayedTimestamp(stanza) ??
-        DateTime.now();
-    final mamResultId = result?.getAttribute('id')?.value;
-    final forwardedStanzaId =
-        forwardedMessage?.getChild('stanza-id')?.getAttribute('id')?.value;
-    _messageController.add(MucMessage(
-      roomJid: roomJid,
-      nick: nick ?? '',
-      body: body,
-      mamResultId: mamResultId,
-      stanzaId: forwardedStanzaId ?? stanza.id,
-      timestamp: timestamp,
-    ));
   }
 
   void _handlePresence(PresenceStanza stanza) {
@@ -147,34 +125,82 @@ class MucManager {
     _presenceController.add(presence);
   }
 
-  String? _extractForwardedBody(XmppElement? message) {
-    return message?.getChild('body')?.textValue;
-  }
+}
 
-  String? _extractForwardedSubject(XmppElement? message) {
-    return message?.getChild('subject')?.textValue;
-  }
+String? _extractForwardedBody(XmppElement? message) {
+  return message?.getChild('body')?.textValue;
+}
 
-  Jid? _parseForwardedFrom(XmppElement? message) {
-    final from = message?.getAttribute('from')?.value;
-    if (from == null || from.isEmpty) {
-      return null;
-    }
-    return Jid.fromFullJid(from);
-  }
+String? _extractForwardedSubject(XmppElement? message) {
+  return message?.getChild('subject')?.textValue;
+}
 
-  DateTime? _extractDelayedTimestamp(XmppElement? element) {
-    final delayed = element?.getChild('delay');
-    final stamp = delayed?.getAttribute('stamp')?.value;
-    if (stamp == null || stamp.isEmpty) {
-      return null;
-    }
-    try {
-      return DateTime.parse(stamp);
-    } catch (_) {
-      return null;
-    }
+Jid? _parseForwardedFrom(XmppElement? message) {
+  final from = message?.getAttribute('from')?.value;
+  if (from == null || from.isEmpty) {
+    return null;
   }
+  return Jid.fromFullJid(from);
+}
+
+DateTime? _extractDelayedTimestamp(XmppElement? element) {
+  final delayed = element?.getChild('delay');
+  final stamp = delayed?.getAttribute('stamp')?.value;
+  if (stamp == null || stamp.isEmpty) {
+    return null;
+  }
+  try {
+    return DateTime.parse(stamp);
+  } catch (_) {
+    return null;
+  }
+}
+
+MucParsedGroupMessage? parseMucGroupMessage(MessageStanza stanza) {
+  final result = stanza.children.firstWhereOrNull((child) => child.name == 'result');
+  final forwarded = result?.getChild('forwarded');
+  final forwardedMessage = forwarded?.getChild('message');
+  final from = _parseForwardedFrom(forwardedMessage) ?? stanza.fromJid;
+  if (from == null) {
+    return null;
+  }
+  final roomJid = from.userAtDomain;
+  final nick = from.resource;
+  final body = _extractForwardedBody(forwardedMessage) ?? stanza.body ?? '';
+  final subject = _extractForwardedSubject(forwardedMessage) ?? stanza.subject;
+  if (subject != null && subject.isNotEmpty && body.trim().isEmpty) {
+    return MucParsedGroupMessage.subject(
+      MucSubjectUpdate(roomJid: roomJid, subject: subject),
+    );
+  }
+  if (body.trim().isEmpty) {
+    return null;
+  }
+  final timestamp = _extractDelayedTimestamp(forwarded) ??
+      _extractDelayedTimestamp(forwardedMessage) ??
+      _extractDelayedTimestamp(stanza) ??
+      DateTime.now();
+  final mamResultId = result?.getAttribute('id')?.value;
+  final forwardedStanzaId =
+      forwardedMessage?.getChild('stanza-id')?.getAttribute('id')?.value;
+  return MucParsedGroupMessage.message(
+    MucMessage(
+      roomJid: roomJid,
+      nick: nick ?? '',
+      body: body,
+      mamResultId: mamResultId,
+      stanzaId: forwardedStanzaId ?? stanza.id,
+      timestamp: timestamp,
+    ),
+  );
+}
+
+class MucParsedGroupMessage {
+  const MucParsedGroupMessage.message(this.message) : subject = null;
+  const MucParsedGroupMessage.subject(this.subject) : message = null;
+
+  final MucMessage? message;
+  final MucSubjectUpdate? subject;
 }
 
 class MucMessage {

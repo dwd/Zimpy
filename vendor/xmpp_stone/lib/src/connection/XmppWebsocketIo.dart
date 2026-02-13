@@ -21,8 +21,17 @@ class XmppWebSocketIo extends XmppWebSocket {
   WebSocketChannel? _webSocket;
   bool _useWebSocket = false;
   late String Function(String event) _map;
+  final TcpSocketConnect _tcpConnect;
+  final SecureSocketFactory _secureSocketFactory;
+  final WebSocketChannelFactory _webSocketConnect;
 
-  XmppWebSocketIo();
+  XmppWebSocketIo({
+    TcpSocketConnect? tcpConnect,
+    SecureSocketFactory? secureSocketFactory,
+    WebSocketChannelFactory? webSocketConnect,
+  })  : _tcpConnect = tcpConnect ?? Socket.connect,
+        _secureSocketFactory = secureSocketFactory ?? _defaultSecureSocketFactory,
+        _webSocketConnect = webSocketConnect ?? _defaultWebSocketConnect;
 
   @override
   Future<XmppWebSocket> connect<S>(String host, int port,
@@ -45,15 +54,15 @@ class XmppWebSocketIo extends XmppWebSocket {
             path: wsPath,
           );
       Log.i(TAG, 'WebSocket URI: $uri');
-      _webSocket = WebSocketChannel.connect(uri, protocols: wsProtocols);
+      _webSocket = _webSocketConnect(uri, protocols: wsProtocols);
     } else {
       if (directTls) {
         Log.i(TAG, 'Direct TLS: SecureSocket.connect');
-        final rawSocket = await Socket.connect(host, port);
-        _tcpSocket = await SecureSocket.secure(rawSocket, host: tlsHost ?? host);
+        final rawSocket = await _tcpConnect(host, port);
+        _tcpSocket = await _secureSocketFactory(rawSocket, host: tlsHost ?? host);
       } else {
         Log.i(TAG, 'Plain TCP: Socket.connect');
-        await Socket.connect(host, port).then((Socket socket) {
+        await _tcpConnect(host, port).then((Socket socket) {
           _tcpSocket = socket;
         });
       }
@@ -113,8 +122,12 @@ class XmppWebSocketIo extends XmppWebSocket {
       return Future.value(null);
     }
     Log.i(TAG, 'StartTLS: SecureSocket.secure');
-    return SecureSocket.secure(_tcpSocket!, onBadCertificate: onBadCertificate)
-        .then((secureSocket) {
+    return _secureSocketFactory(
+      _tcpSocket!,
+      host: host,
+      onBadCertificate: onBadCertificate,
+      supportedProtocols: supportedProtocols,
+    ).then((secureSocket) {
       if (secureSocket != null) {
         _tcpSocket = secureSocket;
       }
@@ -126,4 +139,40 @@ class XmppWebSocketIo extends XmppWebSocket {
   String getStreamOpeningElement(String domain) {
     return """<?xml version='1.0'?><stream:stream xmlns='jabber:client' version='1.0' xmlns:stream='http://etherx.jabber.org/streams' to='$domain' xml:lang='en'>""";
   }
+}
+
+typedef TcpSocketConnect = Future<Socket> Function(String host, int port);
+typedef SecureSocketFactory = Future<SecureSocket> Function(
+  Socket socket, {
+  String? host,
+  SecurityContext? context,
+  bool Function(X509Certificate certificate)? onBadCertificate,
+  List<String>? supportedProtocols,
+});
+typedef WebSocketChannelFactory = WebSocketChannel Function(
+  Uri uri, {
+  Iterable<String>? protocols,
+});
+
+Future<SecureSocket> _defaultSecureSocketFactory(
+  Socket socket, {
+  String? host,
+  SecurityContext? context,
+  bool Function(X509Certificate certificate)? onBadCertificate,
+  List<String>? supportedProtocols,
+}) {
+  return SecureSocket.secure(
+    socket,
+    host: host,
+    context: context,
+    onBadCertificate: onBadCertificate,
+    supportedProtocols: supportedProtocols,
+  );
+}
+
+WebSocketChannel _defaultWebSocketConnect(
+  Uri uri, {
+  Iterable<String>? protocols,
+}) {
+  return WebSocketChannel.connect(uri, protocols: protocols);
 }
