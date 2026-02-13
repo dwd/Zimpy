@@ -15,12 +15,19 @@ jobs:
           cache: true
       - name: Install dependencies
         run: flutter pub get
+      - name: Install xmpp_stone dependencies
+        run: dart pub get
+        working-directory: vendor/xmpp_stone
+      - name: Test xmpp_stone
+        run: dart test
+        working-directory: vendor/xmpp_stone
       - name: Lint
         run: flutter analyze
       - name: Test
         run: flutter test
 
   build-linux:
+    needs: analyze
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,6 +50,7 @@ jobs:
           path: build/linux/x64/release/bundle
 
   build-windows:
+    needs: analyze
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -61,6 +69,7 @@ jobs:
           path: build/windows/x64/runner/Release
 
   build-macos:
+    needs: analyze
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -79,6 +88,7 @@ jobs:
           path: build/macos/Build/Products/Release
 
   build-ios:
+    needs: analyze
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -97,6 +107,7 @@ jobs:
           path: build/ios/iphoneos
 
   build-android:
+    needs: analyze
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -115,6 +126,7 @@ jobs:
           path: build/app/outputs/flutter-apk/app-debug.apk
 
   build-web:
+    needs: analyze
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
