@@ -19,12 +19,23 @@ import 'storage/storage_service.dart';
 import 'xmpp/xmpp_service.dart';
 import 'background/foreground_task_handler.dart';
 import 'utils/xep0392_color.dart';
+import 'package:sentry_flutter/sentry_flutter.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   Log.logLevel = LogLevel.VERBOSE;
   Log.logXmpp = true;
-  runApp(const WimsyApp());
+  await SentryFlutter.init(
+    (options) {
+      options.dsn = 'https://7d58998fe2d0e488aa5f11020778c9f6@sentry.cridland.io/8';
+      // Set tracesSampleRate to 1.0 to capture 100% of transactions for tracing.
+      // We recommend adjusting this value in production.
+      options.tracesSampleRate = 1.0;
+    },
+    appRunner: () => runApp(SentryWidget(child: const WimsyApp())),
+  );
+  // TODO: Remove this line after sending the first sample event to sentry.
+  await Sentry.captureException(Exception('This is a sample exception.'));
 }
 
 const bool _isFlutterTest = bool.fromEnvironment('FLUTTER_TEST');
