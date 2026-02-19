@@ -21,24 +21,39 @@ import 'background/foreground_task_handler.dart';
 import 'utils/xep0392_color.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 
+const String _sentryOptInKey = 'sentry_opt_in';
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   Log.logLevel = LogLevel.VERBOSE;
   Log.logXmpp = true;
-  await SentryFlutter.init(
-    (options) {
-      options.dsn = 'https://7d58998fe2d0e488aa5f11020778c9f6@sentry.cridland.io/8';
-      // Set tracesSampleRate to 1.0 to capture 100% of transactions for tracing.
-      // We recommend adjusting this value in production.
-      options.tracesSampleRate = 1.0;
-    },
-    appRunner: () => runApp(SentryWidget(child: const WimsyApp())),
-  );
-  // TODO: Remove this line after sending the first sample event to sentry.
-  await Sentry.captureException(Exception('This is a sample exception.'));
+  final prefs = await SharedPreferences.getInstance();
+  final optIn = prefs.getBool(_sentryOptInKey) ?? false;
+  await _startApp(sentryEnabled: optIn);
 }
 
 const bool _isFlutterTest = bool.fromEnvironment('FLUTTER_TEST');
+
+Future<void> _startApp({required bool sentryEnabled}) async {
+  if (sentryEnabled) {
+    await SentryFlutter.init(
+      (options) {
+        options.dsn = 'https://7d58998fe2d0e488aa5f11020778c9f6@sentry.cridland.io/8';
+        options.tracesSampleRate = 1.0;
+      },
+      appRunner: () => runApp(SentryWidget(child: const WimsyApp())),
+    );
+    return;
+  }
+  runApp(const WimsyApp());
+}
+
+Future<void> _enableSentryAndRestart() async {
+  if (Sentry.isEnabled) {
+    return;
+  }
+  await _startApp(sentryEnabled: true);
+}
 
 class WimsyApp extends StatefulWidget {
   const WimsyApp({super.key});
@@ -2213,6 +2228,7 @@ class _PinSetupScreenState extends State<_PinSetupScreen> {
   final TextEditingController _confirmController = TextEditingController();
   String? _error;
   bool _submitting = false;
+  bool _sentryOptIn = false;
 
   @override
   void dispose() {
@@ -2250,6 +2266,14 @@ class _PinSetupScreenState extends State<_PinSetupScreen> {
                   decoration: const InputDecoration(labelText: 'Confirm PIN'),
                 ),
                 const SizedBox(height: 16),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: _sentryOptIn,
+                  title: const Text('Share crash reports'),
+                  subtitle: const Text('Help improve Wimsy by sending anonymized crash reports.'),
+                  onChanged: _submitting ? null : (value) => setState(() => _sentryOptIn = value),
+                ),
+                const SizedBox(height: 8),
                 FilledButton(
                   onPressed: _submitting ? null : _submit,
                   child: Text(_submitting ? 'Setting...' : 'Set PIN'),
@@ -2285,7 +2309,12 @@ class _PinSetupScreenState extends State<_PinSetupScreen> {
       _submitting = true;
     });
     try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_sentryOptInKey, _sentryOptIn);
       await widget.onPinSet(pin);
+      if (_sentryOptIn && mounted) {
+        await _enableSentryAndRestart();
+      }
     } catch (error) {
       setState(() => _error = 'Failed to set PIN: $error');
     } finally {
@@ -2309,6 +2338,8 @@ class _PinUnlockScreenState extends State<_PinUnlockScreen> {
   final TextEditingController _pinController = TextEditingController();
   String? _error;
   bool _submitting = false;
+  bool _sentryOptIn = false;
+  bool _loadedSentryPref = false;
 
   @override
   void dispose() {
@@ -2343,6 +2374,16 @@ class _PinUnlockScreenState extends State<_PinUnlockScreen> {
                   onPressed: _submitting ? null : _submit,
                   child: Text(_submitting ? 'Unlocking...' : 'Unlock'),
                 ),
+                if (_loadedSentryPref && !_sentryOptIn) ...[
+                  const SizedBox(height: 12),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: _sentryOptIn,
+                    title: const Text('Share crash reports'),
+                    subtitle: const Text('Help improve Wimsy by sending anonymized crash reports.'),
+                    onChanged: _submitting ? null : (value) => setState(() => _sentryOptIn = value),
+                  ),
+                ],
                 if (_error != null) ...[
                   const SizedBox(height: 12),
                   Text(
@@ -2369,7 +2410,15 @@ class _PinUnlockScreenState extends State<_PinUnlockScreen> {
       _submitting = true;
     });
     try {
+      final prefs = await SharedPreferences.getInstance();
+      final existingOptIn = prefs.getBool(_sentryOptInKey) ?? false;
+      if (_sentryOptIn && !existingOptIn) {
+        await prefs.setBool(_sentryOptInKey, true);
+      }
       await widget.onUnlocked(pin);
+      if (_sentryOptIn && !existingOptIn && mounted) {
+        await _enableSentryAndRestart();
+      }
     } catch (_) {
       setState(() => _error = 'Incorrect PIN.');
     } finally {
@@ -2377,5 +2426,23 @@ class _PinUnlockScreenState extends State<_PinUnlockScreen> {
         setState(() => _submitting = false);
       }
     }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSentryOptIn();
+  }
+
+  Future<void> _loadSentryOptIn() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) {
+      return;
+    }
+    final existing = prefs.getBool(_sentryOptInKey) ?? false;
+    setState(() {
+      _sentryOptIn = existing;
+      _loadedSentryPref = true;
+    });
   }
 }
