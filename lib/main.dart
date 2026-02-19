@@ -18,6 +18,7 @@ import 'storage/account_record.dart';
 import 'storage/storage_service.dart';
 import 'xmpp/xmpp_service.dart';
 import 'background/foreground_task_handler.dart';
+import 'utils/xep0392_color.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -1768,6 +1769,9 @@ class _MessageBubble extends StatelessWidget {
     final textColor = theme.colorScheme.onSurface;
     final linkColor = theme.colorScheme.primary;
     final tickIcon = _tickIcon(theme);
+    final nameColor = message.outgoing
+        ? textColor.withValues(alpha: 0.85)
+        : xep0392ColorForLabel(senderName);
 
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
@@ -1785,7 +1789,7 @@ class _MessageBubble extends StatelessWidget {
                     Expanded(
                       child: Text(
                         senderName,
-                        style: theme.textTheme.labelMedium?.copyWith(color: textColor.withValues(alpha: 0.85)),
+                        style: theme.textTheme.labelMedium?.copyWith(color: nameColor),
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -1994,7 +1998,6 @@ class _AvatarPlaceholder extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final initial = label.trim().isEmpty ? '?' : label.trim()[0].toUpperCase();
     if (bytes != null) {
       return CircleAvatar(
@@ -2002,10 +2005,12 @@ class _AvatarPlaceholder extends StatelessWidget {
         backgroundImage: MemoryImage(bytes!),
       );
     }
+    final baseColor = xep0392ColorForLabel(label);
+    final onBase = baseColor.computeLuminance() > 0.5 ? Colors.black : Colors.white;
     return CircleAvatar(
       radius: 18,
-      backgroundColor: theme.colorScheme.primary.withValues(alpha: 0.2),
-      foregroundColor: theme.colorScheme.primary,
+      backgroundColor: baseColor,
+      foregroundColor: onBase,
       child: Text(initial),
     );
   }
