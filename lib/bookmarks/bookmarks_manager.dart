@@ -25,6 +25,20 @@ class BookmarksManager {
 
   List<ContactEntry> get bookmarks => List.unmodifiable(_bookmarksByJid.values);
 
+  void seedBookmarks(List<ContactEntry> bookmarks) {
+    var updated = false;
+    for (final entry in bookmarks) {
+      final bookmark = entry.isBookmark ? entry : entry.copyWith(isBookmark: true);
+      if (_bookmarksByJid[bookmark.jid] != bookmark) {
+        _bookmarksByJid[bookmark.jid] = bookmark;
+        updated = true;
+      }
+    }
+    if (updated) {
+      _onUpdate(this.bookmarks);
+    }
+  }
+
   void requestBookmarks() {
     final id = AbstractStanza.getRandomId();
     _bookmarks2RequestId = id;
@@ -139,9 +153,12 @@ class BookmarksManager {
     }
 
     final parsed = _parseBookmarks(items);
-    _bookmarksByJid
-      ..clear()
-      ..addEntries(parsed.map((entry) => MapEntry(entry.jid, entry)));
+    if (parsed.isEmpty) {
+      return;
+    }
+    for (final entry in parsed) {
+      _bookmarksByJid[entry.jid] = entry;
+    }
     _onUpdate(bookmarks);
   }
 
@@ -183,9 +200,12 @@ class BookmarksManager {
       return;
     }
     final parsed = _parseLegacyBookmarks(storage);
-    _bookmarksByJid
-      ..clear()
-      ..addEntries(parsed.map((entry) => MapEntry(entry.jid, entry)));
+    if (parsed.isEmpty) {
+      return;
+    }
+    for (final entry in parsed) {
+      _bookmarksByJid[entry.jid] = entry;
+    }
     _onUpdate(bookmarks);
   }
 

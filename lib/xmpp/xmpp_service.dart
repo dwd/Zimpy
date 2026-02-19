@@ -1284,6 +1284,7 @@ class XmppService extends ChangeNotifier {
         notifyListeners();
       },
     );
+    _bookmarksManager?.seedBookmarks(_bookmarks);
     _bookmarksManager?.requestBookmarks();
   }
 
