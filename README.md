@@ -1,22 +1,40 @@
 # Wimsy
 
-Wimsy is a cross-platform XMPP client built with Flutter, focused on modern
-server support and TLS-first connections.
+Wimsy is a cross-platform XMPP client built with Flutter.
+
+It's early days. This was built almost entirely by Codex.
+
+## Platforms
+
+Vaguely tested on:
+
+- Linux
+- Windows
+- Android
+- Web
+
+Builds, but untested on:
+
+- iOS
+- macOS
 
 ## Features
 
-- Direct TLS (XEP-0368) and StartTLS support with SRV discovery
-- Login with full JID + resource (custom host/port supported)
-- Roster sync and manual JID chat creation
-- One-to-one chat view with message history per contact (MAM-aware backfill)
-- Multi-User Chat bookmarks and join/leave
+- Direct TLS (XEP-0368) and StartTLS with SRV discovery
+- Stream Management (XEP-0198) with resumable sessions and ack handling
+- MAM history sync and paging (XEP-0313 + XEP-0059)
+- MUC join/leave + bookmarks (XEP-0045 + XEP-0048/Bookmarks 2)
+- Chat states, receipts, and chat markers (XEP-0085, XEP-0184, XEP-0333)
+- Message carbons (XEP-0280)
+- Roster versioning (XEP-0237)
+- Client State Indication (XEP-0352)
+- PEP avatars (XEP-0084) with +notify; vcard-temp fallback (XEP-0054)
+- Message Displayed Sync (XEP-0490) for unread tracking and notifications
+- Blocking via privacy lists (XEP-0016)
+- XEP-0066 OOB image rendering (partial)
 - Presence state + custom status message
 - Native notifications for incoming messages (desktop + Android)
 - Console protocol traces for send/receive (when enabled)
-
-## Platform Support
-
-- Linux, macOS, Windows, Android, iOS, Web
 
 ## Notes
 
