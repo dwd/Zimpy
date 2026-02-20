@@ -2699,27 +2699,6 @@ class XmppService extends ChangeNotifier {
     _scheduleReconnect(immediate: true, shortTimeout: shortTimeout);
   }
 
-  void _expireOldPing() {
-    if (_pendingPings.isEmpty) {
-      return;
-    }
-    final now = DateTime.now();
-    final timeout = _pingTimeout(shortTimeout: false);
-    final expired = _pendingPings.entries
-        .where((entry) => now.difference(entry.value) > timeout)
-        .map((entry) => entry.key)
-        .toList();
-    if (expired.isEmpty) {
-      return;
-    }
-    for (final id in expired) {
-      _pendingPings.remove(id);
-      final timer = _pingTimeoutTimers.remove(id);
-      timer?.cancel();
-      _pingTimeoutShort.remove(id);
-    }
-    _handlePingTimeout(shortTimeout: false);
-  }
 
   Duration _smAckTimeout({required bool shortTimeout}) {
     final base = _lastPingLatency ?? Duration.zero;

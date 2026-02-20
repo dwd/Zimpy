@@ -1290,12 +1290,12 @@ class _WimsyHomeState extends State<WimsyHome> {
                     labelText: 'Groups (comma or #tags)',
                   ),
                 ),
-                if (isEdit) ...[
+                if (contact != null) ...[
                   const SizedBox(height: 16),
                   Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      'Presence: ${widget.service.presenceLabelFor(contact!.jid)}',
+                      'Presence: ${widget.service.presenceLabelFor(contact.jid)}',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ),

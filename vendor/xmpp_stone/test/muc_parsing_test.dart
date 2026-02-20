@@ -38,6 +38,7 @@ void main() {
         from: 'room@example.com/mod',
         body: '',
         stanzaId: 'stanza-1',
+        stanzaBy: 'room@example.com',
         subject: 'New topic',
       ));
       result.addChild(forwarded);
@@ -58,6 +59,7 @@ void main() {
       stanza.body = 'history';
       stanza.addChild(XmppElement()
         ..name = 'stanza-id'
+        ..addAttribute(XmppAttribute('by', 'room@example.com'))
         ..addAttribute(XmppAttribute('id', 'stanza-55')));
 
       final parsed = parseMucGroupMessage(stanza);
@@ -87,6 +89,7 @@ MessageStanza _mamGroupchatStanza({
     from: '$roomJid/$nick',
     body: body,
     stanzaId: stanzaId,
+    stanzaBy: roomJid,
   ));
   result.addChild(forwarded);
   stanza.addChild(result);
@@ -97,6 +100,7 @@ XmppElement _forwardedMessage({
   required String from,
   required String body,
   required String stanzaId,
+  String? stanzaBy,
   String? subject,
 }) {
   final message = XmppElement()
@@ -112,6 +116,7 @@ XmppElement _forwardedMessage({
   }
   message.addChild(XmppElement()
     ..name = 'stanza-id'
+    ..addAttribute(XmppAttribute('by', stanzaBy ?? ''))
     ..addAttribute(XmppAttribute('id', stanzaId)));
   return message;
 }

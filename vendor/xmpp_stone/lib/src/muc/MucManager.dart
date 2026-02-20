@@ -160,6 +160,12 @@ String? _extractStanzaId(XmppElement? message, String roomJid) {
   if (stanzaId != null && stanzaId.isNotEmpty) {
     return stanzaId;
   }
+  final byMatch = message.children.firstWhereOrNull(
+    (child) => child.name == 'stanza-id' && child.getAttribute('by')?.value == roomJid,
+  )?.getAttribute('id')?.value;
+  if (byMatch != null && byMatch.isNotEmpty) {
+    return byMatch;
+  }
   final fallback = message.getAttribute('id')?.value;
   if (fallback != null && fallback.isNotEmpty) {
     return fallback;
