@@ -47,7 +47,7 @@ class PepCapsManager {
     final bareJid = fromJid.userAtDomain;
     final features = _capsFeatures[capsKey];
     if (features != null) {
-      if (_supportsPepNotify(features)) {
+      if (!_supportsPepNotify(features)) {
         pepManager.subscribeToAvatarMetadata(bareJid);
       }
       return;
@@ -92,7 +92,7 @@ class PepCapsManager {
       }
     }
     _capsFeatures[pending.capsKey] = features;
-    if (_supportsPepNotify(features)) {
+    if (!_supportsPepNotify(features)) {
       pepManager.subscribeToAvatarMetadata(pending.bareJid);
     }
   }

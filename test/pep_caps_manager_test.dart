@@ -72,7 +72,7 @@ IqStanza _discoInfoResult({required String id, required String capsKey, required
 }
 
 void main() {
-  test('Caps +notify triggers disco#info request then auto-subscribe', () {
+  test('Caps +notify triggers disco#info request without subscribing', () {
     final account = XmppAccountSettings('test', 'user', 'example.com', 'pass', 5222);
     final connection = TestConnection(account);
     final storage = FakeStorageService();
@@ -103,6 +103,6 @@ void main() {
     );
     caps.handleStanza(result);
 
-    expect(pep.subscribed, contains('alice@example.com'));
+    expect(pep.subscribed, isEmpty);
   });
 }

@@ -971,9 +971,6 @@ class XmppService extends ChangeNotifier {
             groups: buddy.groups,
             subscriptionType: subscriptionType,
           );
-          if (_shouldSubscribePep(jid)) {
-            _pepManager?.subscribeToAvatarMetadata(jid);
-          }
           _pepManager?.requestMetadataIfMissing(jid);
         }
       }
@@ -1266,14 +1263,8 @@ class XmppService extends ChangeNotifier {
       connection: connection,
       pepManager: _pepManager!,
     );
-    if (_shouldSubscribePep(_currentUserBareJid!)) {
-      _pepManager?.subscribeToAvatarMetadata(_currentUserBareJid!);
-    }
     _pepManager?.requestMetadataIfMissing(_currentUserBareJid!);
     for (final contact in _contacts) {
-      if (_shouldSubscribePep(contact.jid)) {
-        _pepManager?.subscribeToAvatarMetadata(contact.jid);
-      }
       _pepManager?.requestMetadataIfMissing(contact.jid);
     }
     _pepSubscription?.cancel();
@@ -1959,9 +1950,6 @@ class XmppService extends ChangeNotifier {
       _contacts.sort((a, b) => a.displayName.compareTo(b.displayName));
       notifyListeners();
       _rosterPersistor?.call(List.unmodifiable(_contacts));
-      if (_shouldSubscribePep(entry.jid)) {
-        _pepManager?.subscribeToAvatarMetadata(entry.jid);
-      }
       _pepManager?.requestMetadataIfMissing(entry.jid);
       _requestVcardAvatar(entry.jid);
       return;
@@ -2053,18 +2041,6 @@ class XmppService extends ChangeNotifier {
       }
       joinRoom(normalized);
     }
-  }
-
-  bool _shouldSubscribePep(String bareJid) {
-    final normalized = _bareJid(bareJid);
-    final contact = _contacts.firstWhere(
-      (entry) => entry.jid == normalized,
-      orElse: () => ContactEntry(jid: ''),
-    );
-    if (contact.jid.isEmpty) {
-      return true;
-    }
-    return contact.subscriptionType != 'both';
   }
 
   int _contactSort(ContactEntry a, ContactEntry b) {
