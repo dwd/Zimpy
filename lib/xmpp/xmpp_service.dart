@@ -58,6 +58,7 @@ class XmppService extends ChangeNotifier {
   StreamSubscription<AbstractStanza?>? _pepSubscription;
   Timer? _pingTimer;
   Timer? _smAckTimeoutTimer;
+  Timer? _csiIdleTimer;
   final Map<String, DateTime> _pendingPings = {};
   final Map<String, Timer> _pingTimeoutTimers = {};
   final Map<String, bool> _pingTimeoutShort = {};
@@ -105,6 +106,8 @@ class XmppService extends ChangeNotifier {
   Duration? _lastPingLatency;
   DateTime? _lastPingAt;
   bool _carbonsEnabled = false;
+  bool _csiInactive = false;
+  static const Duration _csiIdleDelay = Duration(minutes: 1);
   final Map<String, DateTime> _mamBackfillAt = {};
   final Map<String, DateTime> _mamPageRequestAt = {};
   final Map<String, int> _mamPrependOffset = {};
@@ -369,6 +372,7 @@ class XmppService extends ChangeNotifier {
     if (!_backgroundMode) {
       _reconnectTimer?.cancel();
     }
+    _applyClientState();
     _restartKeepaliveTimer();
     if (_backgroundMode && !_networkOnline) {
       return;
@@ -387,6 +391,16 @@ class XmppService extends ChangeNotifier {
     if (_backgroundMode && !isConnected && !isConnecting) {
       _scheduleReconnect();
     }
+  }
+
+  void noteUserActivity() {
+    if (_backgroundMode) {
+      return;
+    }
+    if (_csiInactive) {
+      _sendClientState(active: true);
+    }
+    _scheduleCsiIdle();
   }
 
   void simulateServerDisconnect() {
@@ -522,6 +536,7 @@ class XmppService extends ChangeNotifier {
           _setupPrivacyLists();
           _primeMamSync();
           _sendInitialPresence();
+          _applyClientState();
         } else if (_isTerminalError(state)) {
           final message = _connectionErrorMessage(state);
           debugPrint('XMPP error: $message');
@@ -2123,6 +2138,8 @@ class XmppService extends ChangeNotifier {
     _pingTimer = null;
     _smAckTimeoutTimer?.cancel();
     _smAckTimeoutTimer = null;
+    _csiIdleTimer?.cancel();
+    _csiIdleTimer = null;
     _smNonzaSubscription?.cancel();
     _smNonzaSubscription = null;
     _pingSubscription?.cancel();
@@ -2186,6 +2203,7 @@ class XmppService extends ChangeNotifier {
     _lastPingLatency = null;
     _lastPingAt = null;
     _carbonsEnabled = false;
+    _csiInactive = false;
     _carbonsRequestId = null;
     _mamBackfillAt.clear();
     _mamPageRequestAt.clear();
@@ -2274,6 +2292,39 @@ class XmppService extends ChangeNotifier {
     debugPrint('XMPP sending presence ${presence.showElement} ${presence.status ?? ''}');
     final presenceManager = PresenceManager.getInstance(connection);
     presenceManager.sendPresence(presence);
+  }
+
+  void _applyClientState() {
+    if (_backgroundMode) {
+      _sendClientState(active: false);
+      _csiIdleTimer?.cancel();
+      _csiIdleTimer = null;
+      return;
+    }
+    _sendClientState(active: true);
+    _scheduleCsiIdle();
+  }
+
+  void _scheduleCsiIdle() {
+    _csiIdleTimer?.cancel();
+    _csiIdleTimer = Timer(_csiIdleDelay, () {
+      _sendClientState(active: false);
+    });
+  }
+
+  void _sendClientState({required bool active}) {
+    final connection = _connection;
+    if (connection == null) {
+      return;
+    }
+    if (active == !_csiInactive) {
+      return;
+    }
+    final nonza = Nonza();
+    nonza.name = active ? 'active' : 'inactive';
+    nonza.addAttribute(XmppAttribute('xmlns', 'urn:xmpp:csi:0'));
+    connection.writeNonza(nonza);
+    _csiInactive = !active;
   }
 
   void _requestCarbons() {

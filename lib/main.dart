@@ -204,12 +204,15 @@ class _WimsyAppState extends State<WimsyApp> with WidgetsBindingObserver {
     );
 
     return WithForegroundTask(
-      child: MaterialApp(
-        title: 'Wimsy',
-        theme: ThemeData(
-          colorScheme: colorScheme,
-          useMaterial3: true,
-          scaffoldBackgroundColor: colorScheme.surface,
+      child: Listener(
+        onPointerDown: (_) => _service.noteUserActivity(),
+        onPointerSignal: (_) => _service.noteUserActivity(),
+        child: MaterialApp(
+          title: 'Wimsy',
+          theme: ThemeData(
+            colorScheme: colorScheme,
+            useMaterial3: true,
+            scaffoldBackgroundColor: colorScheme.surface,
           fontFamily: 'Georgia',
           inputDecorationTheme: InputDecorationTheme(
             filled: true,
@@ -229,14 +232,15 @@ class _WimsyAppState extends State<WimsyApp> with WidgetsBindingObserver {
             contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           ),
         ),
-        home: FutureBuilder<void>(
-          future: _initFuture,
-          builder: (context, snapshot) {
-            if (snapshot.connectionState != ConnectionState.done) {
-              return const _SplashScreen();
-            }
-            return _Gatekeeper(service: _service, storage: _storage);
-          },
+          home: FutureBuilder<void>(
+            future: _initFuture,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState != ConnectionState.done) {
+                return const _SplashScreen();
+              }
+              return _Gatekeeper(service: _service, storage: _storage);
+            },
+          ),
         ),
       ),
     );
