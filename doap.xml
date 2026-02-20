@@ -150,6 +150,12 @@
     </doap:implements>
     <doap:implements>
       <xmpp:SupportedXep>
+        <xmpp:xep rdf:resource="https://xmpp.org/extensions/xep-0444.html"/>
+        <xmpp:status>partial</xmpp:status>
+      </xmpp:SupportedXep>
+    </doap:implements>
+    <doap:implements>
+      <xmpp:SupportedXep>
         <xmpp:xep rdf:resource="https://xmpp.org/extensions/xep-0490.html"/>
         <xmpp:status>complete</xmpp:status>
       </xmpp:SupportedXep>

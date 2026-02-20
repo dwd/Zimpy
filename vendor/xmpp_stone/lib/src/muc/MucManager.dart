@@ -163,6 +163,29 @@ String? _extractOobUrl(XmppElement? message) {
   return null;
 }
 
+_ReactionInfo? _extractReactions(XmppElement? message) {
+  if (message == null) {
+    return null;
+  }
+  for (final child in message.children) {
+    if (child.name != 'reactions' ||
+        child.getAttribute('xmlns')?.value != 'urn:xmpp:reactions:0') {
+      continue;
+    }
+    final targetId = child.getAttribute('id')?.value;
+    if (targetId == null || targetId.isEmpty) {
+      return null;
+    }
+    final reactions = child.children
+        .where((reaction) => reaction.name == 'reaction')
+        .map((reaction) => reaction.textValue?.trim() ?? '')
+        .where((value) => value.isNotEmpty)
+        .toList();
+    return _ReactionInfo(targetId, reactions);
+  }
+  return null;
+}
+
 String? _extractStanzaId(XmppElement? message, String roomJid) {
   if (message == null) {
     return null;
@@ -234,13 +257,16 @@ MucParsedGroupMessage? parseMucGroupMessage(MessageStanza stanza) {
   final nick = from.resource;
   final body = _extractForwardedBody(forwardedMessage) ?? stanza.body ?? '';
   final oobUrl = _extractOobUrl(forwardedMessage) ?? _extractOobUrl(stanza);
+  final reactionsInfo = _extractReactions(forwardedMessage) ?? _extractReactions(stanza);
   final subject = _extractForwardedSubject(forwardedMessage) ?? stanza.subject;
   if (subject != null && subject.isNotEmpty && body.trim().isEmpty) {
     return MucParsedGroupMessage.subject(
       MucSubjectUpdate(roomJid: roomJid, subject: subject),
     );
   }
-  if (body.trim().isEmpty && (oobUrl == null || oobUrl.isEmpty)) {
+  if (body.trim().isEmpty &&
+      (oobUrl == null || oobUrl.isEmpty) &&
+      reactionsInfo == null) {
     return null;
   }
   final timestamp = _extractDelayedTimestamp(forwarded) ??
@@ -258,12 +284,21 @@ MucParsedGroupMessage? parseMucGroupMessage(MessageStanza stanza) {
       body: body,
       oobUrl: oobUrl,
       rawXml: stanza.buildXmlString(),
+      reactionTargetId: reactionsInfo?.targetId,
+      reactions: reactionsInfo?.reactions ?? const [],
       mamResultId: mamResultId,
       messageId: messageIdAttr,
       stanzaId: forwardedStanzaId ?? directStanzaId ?? stanza.id,
       timestamp: timestamp,
     ),
   );
+}
+
+class _ReactionInfo {
+  const _ReactionInfo(this.targetId, this.reactions);
+
+  final String targetId;
+  final List<String> reactions;
 }
 
 class MucParsedGroupMessage {
@@ -285,6 +320,8 @@ class MucMessage {
     this.stanzaId,
     this.oobUrl,
     this.rawXml,
+    this.reactionTargetId,
+    this.reactions = const [],
   });
 
   final String roomJid;
@@ -296,6 +333,8 @@ class MucMessage {
   final String? stanzaId;
   final String? oobUrl;
   final String? rawXml;
+  final String? reactionTargetId;
+  final List<String> reactions;
 }
 
 class MucPresenceUpdate {

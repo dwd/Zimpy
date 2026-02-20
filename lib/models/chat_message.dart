@@ -10,6 +10,7 @@ class ChatMessage {
     this.stanzaId,
     this.oobUrl,
     this.rawXml,
+    this.reactions = const {},
     this.acked = false,
     this.receiptReceived = false,
     this.displayed = false,
@@ -25,6 +26,7 @@ class ChatMessage {
   final String? stanzaId;
   final String? oobUrl;
   final String? rawXml;
+  final Map<String, List<String>> reactions;
   final bool acked;
   final bool receiptReceived;
   final bool displayed;
@@ -41,6 +43,7 @@ class ChatMessage {
       'stanzaId': stanzaId,
       'oobUrl': oobUrl,
       'rawXml': rawXml,
+      'reactions': reactions,
       'acked': acked,
       'receiptReceived': receiptReceived,
       'displayed': displayed,
@@ -61,6 +64,7 @@ class ChatMessage {
     final stanzaId = map['stanzaId']?.toString();
     final oobUrl = map['oobUrl']?.toString();
     final rawXml = map['rawXml']?.toString();
+    final reactions = _parseReactions(map['reactions']);
     final acked = map['acked'] == true;
     final receiptReceived = map['receiptReceived'] == true;
     final displayed = map['displayed'] == true;
@@ -85,9 +89,31 @@ class ChatMessage {
       stanzaId: stanzaId,
       oobUrl: oobUrl,
       rawXml: rawXml,
+      reactions: reactions,
       acked: acked,
       receiptReceived: receiptReceived,
       displayed: displayed,
     );
+  }
+
+  static Map<String, List<String>> _parseReactions(dynamic raw) {
+    if (raw is! Map) {
+      return const {};
+    }
+    final result = <String, List<String>>{};
+    for (final entry in raw.entries) {
+      final emoji = entry.key?.toString() ?? '';
+      if (emoji.isEmpty) {
+        continue;
+      }
+      final value = entry.value;
+      if (value is List) {
+        final senders = value.map((item) => item.toString()).where((item) => item.isNotEmpty).toList();
+        if (senders.isNotEmpty) {
+          result[emoji] = senders;
+        }
+      }
+    }
+    return result.isEmpty ? const {} : result;
   }
 }

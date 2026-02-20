@@ -9,7 +9,7 @@ commit (but do not push) the result. Always test with flutter analyze, flutter t
 * Message editing - XEP-0308
 * Message Replies
 * ✓ Inline images and file attachments. Should do reading then sending.
-* Message reactions (XEP-0444)
+* ✓ Message reactions (XEP-0444)
 * ✓ Revisit message caching: we only persist flattened ChatMessage fields (no raw stanza XML), so new parsing features won't retroactively apply to cached history.
 * Maestro test suite?
 * ✓ Client State Indication - XEP-0352 (when client unfocused for some time or explicitly backgrounded)

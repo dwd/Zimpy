@@ -990,6 +990,51 @@ class XmppService extends ChangeNotifier {
     );
   }
 
+  void sendReaction({
+    required String bareJid,
+    required ChatMessage message,
+    required String emoji,
+    required bool isRoom,
+  }) {
+    final connection = _connection;
+    if (connection == null) {
+      return;
+    }
+    final trimmed = emoji.trim();
+    if (trimmed.isEmpty) {
+      return;
+    }
+    final targetId = message.stanzaId ?? message.messageId;
+    if (targetId == null || targetId.isEmpty) {
+      return;
+    }
+    final stanza = MessageStanza(
+      AbstractStanza.getRandomId(),
+      isRoom ? MessageStanzaType.GROUPCHAT : MessageStanzaType.CHAT,
+    );
+    stanza.toJid = Jid.fromFullJid(_bareJid(bareJid));
+    final reactions = XmppElement()..name = 'reactions';
+    reactions.addAttribute(XmppAttribute('xmlns', 'urn:xmpp:reactions:0'));
+    reactions.addAttribute(XmppAttribute('id', targetId));
+    final reaction = XmppElement()..name = 'reaction';
+    reaction.textValue = trimmed;
+    reactions.addChild(reaction);
+    stanza.addChild(reactions);
+    connection.writeStanza(stanza);
+
+    final sender = isRoom
+        ? _roomNickFor(_bareJid(bareJid))
+        : (_currentUserBareJid ?? '');
+    if (sender.isEmpty) {
+      return;
+    }
+    if (isRoom) {
+      _applyRoomReactionUpdate(_bareJid(bareJid), sender, targetId, [trimmed]);
+    } else {
+      _applyReactionUpdate(_bareJid(bareJid), sender, _ReactionUpdate(targetId, [trimmed]));
+    }
+  }
+
   void _setupRoster() {
     final connection = _connection;
     if (connection == null) {
@@ -1093,6 +1138,15 @@ class XmppService extends ChangeNotifier {
     _roomSubscriptions['message']?.cancel();
     _roomSubscriptions['message'] =
         _mucManager!.roomMessageStream.listen((message) {
+      if (message.reactionTargetId != null) {
+        _applyRoomReactionUpdate(
+          message.roomJid,
+          message.nick,
+          message.reactionTargetId!,
+          message.reactions,
+        );
+        return;
+      }
       _addRoomMessage(
         roomJid: message.roomJid,
         from: message.nick,
@@ -1150,6 +1204,17 @@ class XmppService extends ChangeNotifier {
     final displayedId = _extractMarkerId(stanza, 'displayed');
     if (displayedId != null) {
       _applyDisplayed(fromBare, displayedId);
+      return;
+    }
+    final reaction = _extractReactionUpdate(stanza);
+    if (reaction != null) {
+      final targetBare = _reactionChatTarget(
+        fromBare,
+        stanza.toJid?.userAtDomain ?? '',
+      );
+      if (targetBare.isNotEmpty) {
+        _applyReactionUpdate(targetBare, fromBare, reaction);
+      }
       return;
     }
     final body = stanza.body ?? '';
@@ -1242,6 +1307,180 @@ class XmppService extends ChangeNotifier {
       }
     }
     return null;
+  }
+
+  _ReactionUpdate? _extractReactionUpdate(XmppElement stanza) {
+    final candidates = <XmppElement>[stanza];
+    for (final child in stanza.children) {
+      if (child.name != 'result' && child.name != 'sent' && child.name != 'received') {
+        continue;
+      }
+      final forwarded = child.getChild('forwarded');
+      final message = forwarded?.getChild('message');
+      if (message != null) {
+        candidates.add(message);
+      }
+    }
+    final directForwarded = stanza.getChild('forwarded');
+    final forwardedMessage = directForwarded?.getChild('message');
+    if (forwardedMessage != null) {
+      candidates.add(forwardedMessage);
+    }
+    for (final candidate in candidates) {
+      for (final child in candidate.children) {
+        if (child.name != 'reactions' ||
+            child.getAttribute('xmlns')?.value != 'urn:xmpp:reactions:0') {
+          continue;
+        }
+        final targetId = child.getAttribute('id')?.value ?? '';
+        if (targetId.isEmpty) {
+          return null;
+        }
+        final reactions = child.children
+            .where((reaction) => reaction.name == 'reaction')
+            .map((reaction) => reaction.textValue?.trim() ?? '')
+            .where((value) => value.isNotEmpty)
+            .toList();
+        return _ReactionUpdate(targetId, reactions);
+      }
+    }
+    return null;
+  }
+
+  String _reactionChatTarget(String fromBare, String toBare) {
+    final selfBare = _currentUserBareJid;
+    if (selfBare != null && _bareJid(fromBare) == selfBare) {
+      return _bareJid(toBare);
+    }
+    return _bareJid(fromBare);
+  }
+
+  void _applyReactionUpdate(String bareJid, String sender, _ReactionUpdate update) {
+    final normalized = _bareJid(bareJid);
+    final list = _messages[normalized];
+    if (list == null || list.isEmpty) {
+      return;
+    }
+    final changed = _updateReactionsInList(list, sender, update);
+    if (!changed) {
+      return;
+    }
+    notifyListeners();
+    _messagePersistor?.call(normalized, List.unmodifiable(list));
+  }
+
+  void _applyRoomReactionUpdate(
+    String roomJid,
+    String sender,
+    String targetId,
+    List<String> reactions,
+  ) {
+    final normalized = _bareJid(roomJid);
+    final list = _roomMessages[normalized];
+    if (list == null || list.isEmpty) {
+      return;
+    }
+    final changed = _updateReactionsInList(
+      list,
+      sender,
+      _ReactionUpdate(targetId, reactions),
+    );
+    if (!changed) {
+      return;
+    }
+    notifyListeners();
+    _roomMessagePersistor?.call(normalized, List.unmodifiable(list));
+  }
+
+  bool _updateReactionsInList(
+    List<ChatMessage> list,
+    String sender,
+    _ReactionUpdate update,
+  ) {
+    if (sender.isEmpty || update.targetId.isEmpty) {
+      return false;
+    }
+    for (var i = list.length - 1; i >= 0; i--) {
+      final existing = list[i];
+      if (existing.stanzaId != update.targetId &&
+          existing.messageId != update.targetId) {
+        continue;
+      }
+      final nextReactions = _nextReactions(existing.reactions, sender, update.reactions);
+      if (_reactionsEqual(existing.reactions, nextReactions)) {
+        return true;
+      }
+      list[i] = ChatMessage(
+        from: existing.from,
+        to: existing.to,
+        body: existing.body,
+        outgoing: existing.outgoing,
+        timestamp: existing.timestamp,
+        messageId: existing.messageId,
+        mamId: existing.mamId,
+        stanzaId: existing.stanzaId,
+        oobUrl: existing.oobUrl,
+        rawXml: existing.rawXml,
+        reactions: nextReactions,
+        acked: existing.acked,
+        receiptReceived: existing.receiptReceived,
+        displayed: existing.displayed,
+      );
+      return true;
+    }
+    return false;
+  }
+
+  Map<String, List<String>> _nextReactions(
+    Map<String, List<String>> existing,
+    String sender,
+    List<String> reactions,
+  ) {
+    final next = <String, Set<String>>{};
+    existing.forEach((emoji, senders) {
+      final filtered = senders.where((value) => value.isNotEmpty && value != sender).toSet();
+      if (filtered.isNotEmpty) {
+        next[emoji] = filtered;
+      }
+    });
+    for (final reaction in reactions) {
+      if (reaction.isEmpty) {
+        continue;
+      }
+      final set = next.putIfAbsent(reaction, () => <String>{});
+      set.add(sender);
+    }
+    final result = <String, List<String>>{};
+    for (final entry in next.entries) {
+      final senders = entry.value.toList()..sort();
+      if (senders.isNotEmpty) {
+        result[entry.key] = senders;
+      }
+    }
+    return result;
+  }
+
+  bool _reactionsEqual(
+    Map<String, List<String>> a,
+    Map<String, List<String>> b,
+  ) {
+    if (a.length != b.length) {
+      return false;
+    }
+    for (final entry in a.entries) {
+      final other = b[entry.key];
+      if (other == null || other.length != entry.value.length) {
+        return false;
+      }
+      final sortedA = List<String>.from(entry.value)..sort();
+      final sortedB = List<String>.from(other)..sort();
+      for (var i = 0; i < sortedA.length; i += 1) {
+        if (sortedA[i] != sortedB[i]) {
+          return false;
+        }
+      }
+    }
+    return true;
   }
 
   String _serializeStanza(XmppElement stanza) {
@@ -1681,6 +1920,14 @@ class XmppService extends ChangeNotifier {
         final body = message.text ?? '';
         final oobUrl = _extractOobUrlFromStanza(message.messageStanza);
         final rawXml = _serializeStanza(message.messageStanza);
+        final reaction = _extractReactionUpdate(message.messageStanza);
+        if (reaction != null) {
+          final targetBare = _reactionChatTarget(from, to);
+          if (targetBare.isNotEmpty) {
+            _applyReactionUpdate(targetBare, from, reaction);
+          }
+          continue;
+        }
         if (body.trim().isEmpty && (oobUrl == null || oobUrl.isEmpty)) {
           continue;
         }
@@ -1707,6 +1954,14 @@ class XmppService extends ChangeNotifier {
       final body = message.text ?? '';
       final oobUrl = _extractOobUrlFromStanza(message.messageStanza);
       final rawXml = _serializeStanza(message.messageStanza);
+      final reaction = _extractReactionUpdate(message.messageStanza);
+      if (reaction != null) {
+        final targetBare = _reactionChatTarget(from, to);
+        if (targetBare.isNotEmpty) {
+          _applyReactionUpdate(targetBare, from, reaction);
+        }
+        return;
+      }
       if (body.trim().isEmpty && (oobUrl == null || oobUrl.isEmpty)) {
         return;
       }
@@ -1776,6 +2031,7 @@ class XmppService extends ChangeNotifier {
             stanzaId: nextStanzaId,
             oobUrl: nextOobUrl,
             rawXml: nextRawXml,
+            reactions: existing.reactions,
             acked: existing.acked,
             receiptReceived: existing.receiptReceived,
             displayed: existing.displayed,
@@ -1833,6 +2089,7 @@ class XmppService extends ChangeNotifier {
           stanzaId: stanzaId,
           oobUrl: oobUrl,
           rawXml: rawXml,
+          reactions: const {},
         ),
       );
       _mamPrependOffset[normalized] = prependOffset + 1;
@@ -1854,6 +2111,7 @@ class XmppService extends ChangeNotifier {
       stanzaId: stanzaId,
       oobUrl: oobUrl,
       rawXml: rawXml,
+      reactions: const {},
     );
     _insertMessageOrdered(list, newMessage);
     if (!outgoing) {
@@ -1910,6 +2168,7 @@ class XmppService extends ChangeNotifier {
             stanzaId: nextStanzaId,
             oobUrl: nextOobUrl,
             rawXml: nextRawXml,
+            reactions: existing.reactions,
             acked: existing.acked,
             receiptReceived: nextReceiptReceived,
             displayed: existing.displayed,
@@ -1944,6 +2203,7 @@ class XmppService extends ChangeNotifier {
           stanzaId: stanzaId,
           oobUrl: oobUrl,
           rawXml: rawXml,
+          reactions: const {},
         ),
       );
       _mamPrependOffset[normalized] = prependOffset + 1;
@@ -1965,6 +2225,7 @@ class XmppService extends ChangeNotifier {
       stanzaId: stanzaId,
       oobUrl: oobUrl,
       rawXml: rawXml,
+      reactions: const {},
     );
     _insertMessageOrdered(list, newMessage);
     notifyListeners();
@@ -2050,6 +2311,8 @@ class XmppService extends ChangeNotifier {
         mamId: existing.mamId,
         stanzaId: existing.stanzaId,
         oobUrl: existing.oobUrl,
+        rawXml: existing.rawXml,
+        reactions: existing.reactions,
         acked: nextAcked,
         receiptReceived: nextReceipt,
         displayed: nextDisplayed,
@@ -2096,6 +2359,8 @@ class XmppService extends ChangeNotifier {
         mamId: existing.mamId,
         stanzaId: existing.stanzaId,
         oobUrl: existing.oobUrl,
+        rawXml: existing.rawXml,
+        reactions: existing.reactions,
         acked: nextAcked,
         receiptReceived: nextReceipt,
         displayed: nextDisplayed,
@@ -2218,6 +2483,7 @@ class XmppService extends ChangeNotifier {
           stanzaId: (stanzaId != null && stanzaId.isNotEmpty) ? stanzaId : existing.stanzaId,
           oobUrl: existing.oobUrl,
           rawXml: nextRawXml,
+          reactions: existing.reactions,
           acked: existing.acked,
           receiptReceived: existing.receiptReceived,
           displayed: existing.displayed,
@@ -2248,6 +2514,7 @@ class XmppService extends ChangeNotifier {
         stanzaId: (stanzaId != null && stanzaId.isNotEmpty) ? stanzaId : existing.stanzaId,
         oobUrl: existing.oobUrl,
         rawXml: existing.rawXml,
+        reactions: existing.reactions,
         acked: existing.acked,
         receiptReceived: existing.receiptReceived,
         displayed: existing.displayed,
@@ -3136,4 +3403,11 @@ class XmppService extends ChangeNotifier {
     }
     _sendPing(shortTimeout: shortTimeout);
   }
+}
+
+class _ReactionUpdate {
+  _ReactionUpdate(this.targetId, this.reactions);
+
+  final String targetId;
+  final List<String> reactions;
 }

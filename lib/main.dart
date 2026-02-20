@@ -1096,6 +1096,17 @@ class _WimsyHomeState extends State<WimsyHome> {
                         senderName: senderName,
                         timestamp: timestamp,
                         avatarBytes: avatarBytes,
+                        onReact: (emoji) {
+                          if (activeChat == null) {
+                            return;
+                          }
+                          service.sendReaction(
+                            bareJid: activeChat,
+                            message: message,
+                            emoji: emoji,
+                            isRoom: isBookmark,
+                          );
+                        },
                       );
                     },
                   ),
@@ -1800,12 +1811,23 @@ class _MessageBubble extends StatelessWidget {
     required this.senderName,
     required this.timestamp,
     required this.avatarBytes,
+    required this.onReact,
   });
 
   final ChatMessage message;
   final String senderName;
   final String timestamp;
   final Uint8List? avatarBytes;
+  final void Function(String emoji)? onReact;
+
+  static const List<String> _reactionOptions = [
+    '👍',
+    '❤️',
+    '😂',
+    '😮',
+    '😢',
+    '👎',
+  ];
 
   @override
   Widget build(BuildContext context) {
@@ -1818,7 +1840,9 @@ class _MessageBubble extends StatelessWidget {
         : xep0392ColorForLabel(senderName);
     final oobImage = _buildOobImage(context);
 
-    return Container(
+    return GestureDetector(
+      onLongPress: onReact == null ? null : () => _showReactionSheet(context),
+      child: Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1870,12 +1894,17 @@ class _MessageBubble extends StatelessWidget {
                           decoration: TextDecoration.underline,
                         ),
                       ),
-                    ),
                   ),
+                ),
+                if (message.reactions.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  _buildReactionRow(context),
+                ],
               ],
             ),
           ),
         ],
+      ),
       ),
     );
   }
@@ -2030,6 +2059,59 @@ class _MessageBubble extends StatelessWidget {
     }
     final path = uri.path.toLowerCase();
     return RegExp(r'\.(png|jpe?g|gif|webp|bmp)$').hasMatch(path);
+  }
+
+  void _showReactionSheet(BuildContext context) {
+    if (onReact == null) {
+      return;
+    }
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Wrap(
+              spacing: 8,
+              children: [
+                for (final emoji in _reactionOptions)
+                  TextButton(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      onReact?.call(emoji);
+                    },
+                    child: Text(emoji, style: const TextStyle(fontSize: 20)),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildReactionRow(BuildContext context) {
+    final theme = Theme.of(context);
+    final entries = message.reactions.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      children: [
+        for (final entry in entries)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceVariant,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              '${entry.key} ${entry.value.length}',
+              style: theme.textTheme.labelSmall,
+            ),
+          ),
+      ],
+    );
   }
 }
 
