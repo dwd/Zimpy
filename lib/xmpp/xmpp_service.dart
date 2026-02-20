@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:cryptography/cryptography.dart';
 import 'package:xmpp_stone/xmpp_stone.dart';
 import '../models/chat_message.dart';
 import '../models/contact_entry.dart';
@@ -106,6 +107,14 @@ class XmppService extends ChangeNotifier {
   Duration? _lastPingLatency;
   DateTime? _lastPingAt;
   bool _carbonsEnabled = false;
+  static const String _capsNode = 'https://wimsy.im/caps';
+  static const String _capsHash = 'sha-1';
+  static const List<String> _capsFeatures = [
+    'http://jabber.org/protocol/chatstates',
+    'urn:xmpp:avatar:metadata+notify',
+    'urn:xmpp:mds:displayed:0+notify',
+  ];
+  String? _capsVer;
   bool _csiInactive = false;
   static const Duration _csiIdleDelay = Duration(minutes: 1);
   final Map<String, DateTime> _mamBackfillAt = {};
@@ -2482,8 +2491,37 @@ class XmppService extends ChangeNotifier {
       return;
     }
     debugPrint('XMPP sending presence ${presence.showElement} ${presence.status ?? ''}');
-    final presenceManager = PresenceManager.getInstance(connection);
-    presenceManager.sendPresence(presence);
+    final stanza = PresenceStanza();
+    stanza.show = presence.showElement;
+    stanza.status = presence.status;
+    stanza.addChild(_buildCapsElement());
+    connection.writeStanza(stanza);
+  }
+
+  XmppElement _buildCapsElement() {
+    final caps = XmppElement()..name = 'c';
+    caps.addAttribute(XmppAttribute('xmlns', 'http://jabber.org/protocol/caps'));
+    caps.addAttribute(XmppAttribute('hash', _capsHash));
+    caps.addAttribute(XmppAttribute('node', _capsNode));
+    caps.addAttribute(XmppAttribute('ver', _capsVerValue()));
+    return caps;
+  }
+
+  String _capsVerValue() {
+    final cached = _capsVer;
+    if (cached != null) {
+      return cached;
+    }
+    final features = List<String>.from(_capsFeatures)..sort();
+    final buffer = StringBuffer();
+    for (final feature in features) {
+      buffer.write(feature);
+      buffer.write('<');
+    }
+    final hash = Sha1().toSync().hashSync(utf8.encode(buffer.toString()));
+    final ver = base64Encode(hash.bytes);
+    _capsVer = ver;
+    return ver;
   }
 
   void _applyClientState() {
