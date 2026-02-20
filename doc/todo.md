@@ -8,8 +8,9 @@ commit (but do not push) the result. Always test with flutter analyze, flutter t
 * ✓ Implement roster versioning - XEP-0237
 * Message editing - XEP-0308
 * Message Replies
-* Inline images and file attachments. Should do reading then sending.
-* Revisit message caching: we only persist flattened ChatMessage fields (no raw stanza XML), so new parsing features won't retroactively apply to cached history.
+* ✓ Inline images and file attachments. Should do reading then sending.
+* Message reactions (XEP-0444)
+* ✓ Revisit message caching: we only persist flattened ChatMessage fields (no raw stanza XML), so new parsing features won't retroactively apply to cached history.
 * Maestro test suite?
 * ✓ Client State Indication - XEP-0352 (when client unfocused for some time or explicitly backgrounded)
 * Check over MAM and see if it can be optimized. In particular I think recording the last mam-id should allow us to elide or simplify the initial MAM catchup. You may need to update ./doc/mam-sync.md as well.
