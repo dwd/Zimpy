@@ -1406,8 +1406,9 @@ class XmppService extends ChangeNotifier {
           existing.messageId != update.targetId) {
         continue;
       }
-      final nextReactions = _nextReactions(existing.reactions, sender, update.reactions);
-      if (_reactionsEqual(existing.reactions, nextReactions)) {
+    final nextReactions =
+        _nextReactions(existing.reactions ?? const {}, sender, update.reactions);
+    if (_reactionsEqual(existing.reactions ?? const {}, nextReactions)) {
         return true;
       }
       list[i] = ChatMessage(
@@ -2031,7 +2032,7 @@ class XmppService extends ChangeNotifier {
             stanzaId: nextStanzaId,
             oobUrl: nextOobUrl,
             rawXml: nextRawXml,
-            reactions: existing.reactions,
+            reactions: existing.reactions ?? const {},
             acked: existing.acked,
             receiptReceived: existing.receiptReceived,
             displayed: existing.displayed,
@@ -2168,7 +2169,7 @@ class XmppService extends ChangeNotifier {
             stanzaId: nextStanzaId,
             oobUrl: nextOobUrl,
             rawXml: nextRawXml,
-            reactions: existing.reactions,
+            reactions: existing.reactions ?? const {},
             acked: existing.acked,
             receiptReceived: nextReceiptReceived,
             displayed: existing.displayed,
@@ -2312,7 +2313,7 @@ class XmppService extends ChangeNotifier {
         stanzaId: existing.stanzaId,
         oobUrl: existing.oobUrl,
         rawXml: existing.rawXml,
-        reactions: existing.reactions,
+        reactions: existing.reactions ?? const {},
         acked: nextAcked,
         receiptReceived: nextReceipt,
         displayed: nextDisplayed,
@@ -2360,7 +2361,7 @@ class XmppService extends ChangeNotifier {
         stanzaId: existing.stanzaId,
         oobUrl: existing.oobUrl,
         rawXml: existing.rawXml,
-        reactions: existing.reactions,
+        reactions: existing.reactions ?? const {},
         acked: nextAcked,
         receiptReceived: nextReceipt,
         displayed: nextDisplayed,
@@ -2483,7 +2484,7 @@ class XmppService extends ChangeNotifier {
           stanzaId: (stanzaId != null && stanzaId.isNotEmpty) ? stanzaId : existing.stanzaId,
           oobUrl: existing.oobUrl,
           rawXml: nextRawXml,
-          reactions: existing.reactions,
+          reactions: existing.reactions ?? const {},
           acked: existing.acked,
           receiptReceived: existing.receiptReceived,
           displayed: existing.displayed,
@@ -2514,7 +2515,7 @@ class XmppService extends ChangeNotifier {
         stanzaId: (stanzaId != null && stanzaId.isNotEmpty) ? stanzaId : existing.stanzaId,
         oobUrl: existing.oobUrl,
         rawXml: existing.rawXml,
-        reactions: existing.reactions,
+        reactions: existing.reactions ?? const {},
         acked: existing.acked,
         receiptReceived: existing.receiptReceived,
         displayed: existing.displayed,

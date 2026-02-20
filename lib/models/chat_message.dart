@@ -10,7 +10,7 @@ class ChatMessage {
     this.stanzaId,
     this.oobUrl,
     this.rawXml,
-    this.reactions = const {},
+    this.reactions,
     this.acked = false,
     this.receiptReceived = false,
     this.displayed = false,
@@ -26,7 +26,7 @@ class ChatMessage {
   final String? stanzaId;
   final String? oobUrl;
   final String? rawXml;
-  final Map<String, List<String>> reactions;
+  final Map<String, List<String>>? reactions;
   final bool acked;
   final bool receiptReceived;
   final bool displayed;
@@ -43,7 +43,7 @@ class ChatMessage {
       'stanzaId': stanzaId,
       'oobUrl': oobUrl,
       'rawXml': rawXml,
-      'reactions': reactions,
+      'reactions': reactions ?? const {},
       'acked': acked,
       'receiptReceived': receiptReceived,
       'displayed': displayed,

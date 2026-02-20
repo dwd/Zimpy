@@ -1839,6 +1839,7 @@ class _MessageBubble extends StatelessWidget {
         ? textColor.withValues(alpha: 0.85)
         : xep0392ColorForLabel(senderName);
     final oobImage = _buildOobImage(context);
+    final reactions = message.reactions ?? const {};
 
     return GestureDetector(
       onLongPress: onReact == null ? null : () => _showReactionSheet(context),
@@ -1896,9 +1897,9 @@ class _MessageBubble extends StatelessWidget {
                       ),
                   ),
                 ),
-                if (message.reactions.isNotEmpty) ...[
+                if (reactions.isNotEmpty) ...[
                   const SizedBox(height: 6),
-                  _buildReactionRow(context),
+                  _buildReactionRow(context, reactions),
                 ],
               ],
             ),
@@ -2090,9 +2091,9 @@ class _MessageBubble extends StatelessWidget {
     );
   }
 
-  Widget _buildReactionRow(BuildContext context) {
+  Widget _buildReactionRow(BuildContext context, Map<String, List<String>> reactions) {
     final theme = Theme.of(context);
-    final entries = message.reactions.entries.toList()
+    final entries = reactions.entries.toList()
       ..sort((a, b) => a.key.compareTo(b.key));
     return Wrap(
       spacing: 6,
