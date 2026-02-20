@@ -48,7 +48,10 @@ class StreamManagementModule extends Negotiator {
 
   bool ackTurnedOn = true;
   Timer? timer;
+  Timer? _pendingAckRequestTimer;
   int lastAckSent = 0;
+  static const Duration _periodicAckInterval = Duration(minutes: 5);
+  static const Duration _pendingAckRequestDelay = Duration(seconds: 15);
 
   final StreamController<AbstractStanza> _deliveredStanzasStreamController =
       StreamController.broadcast();
@@ -89,6 +92,8 @@ class StreamManagementModule extends Negotiator {
         _connection.connectionStateStream.listen((state) {
       if (state == XmppConnectionState.Reconnecting) {
         backToIdle();
+        _pendingAckRequestTimer?.cancel();
+        _pendingAckRequestTimer = null;
       }
       if (!_connection.isOpened() && timer != null) {
         timer!.cancel();
@@ -98,6 +103,8 @@ class StreamManagementModule extends Negotiator {
         streamState = StreamState();
         lastAckSent = 0;
         Log.d(TAG, 'SM reset on Closed: recv=0 ackSent=0');
+        _pendingAckRequestTimer?.cancel();
+        _pendingAckRequestTimer = null;
         inStanzaSubscription?.cancel();
         outStanzaSubscription?.cancel();
         inStanzaSubscription = null;
@@ -148,6 +155,8 @@ class StreamManagementModule extends Negotiator {
           Log.d(TAG, 'Resuming failed recv=${streamState.lastReceivedStanza} ackSent=$lastAckSent');
           streamState = StreamState();
           lastAckSent = 0;
+          _pendingAckRequestTimer?.cancel();
+          _pendingAckRequestTimer = null;
           state = NegotiatorState.DONE;
           negotiatorStateStreamController = StreamController();
           state = NegotiatorState.IDLE; //we will try again
@@ -169,6 +178,7 @@ class StreamManagementModule extends Negotiator {
   void parseOutStanza(AbstractStanza stanza) {
     streamState.lastSentStanza++;
     streamState.nonConfirmedSentStanzas.addLast(stanza);
+    _schedulePendingAckRequest();
   }
 
   void parseInStanza(AbstractStanza? stanza) {
@@ -192,8 +202,7 @@ class StreamManagementModule extends Negotiator {
     if (timer != null) {
       timer!.cancel();
     }
-    timer = Timer.periodic(
-        Duration(milliseconds: 5000), (Timer t) => sendAckRequest());
+    timer = Timer.periodic(_periodicAckInterval, (Timer t) => sendAckRequest());
     outStanzaSubscription?.cancel();
     inStanzaSubscription?.cancel();
     outStanzaSubscription = _connection.outStanzasStream.listen(parseOutStanza);
@@ -207,8 +216,7 @@ class StreamManagementModule extends Negotiator {
     if (timer != null) {
       timer!.cancel();
     }
-    timer = Timer.periodic(
-        Duration(milliseconds: 5000), (Timer t) => sendAckRequest());
+    timer = Timer.periodic(_periodicAckInterval, (Timer t) => sendAckRequest());
     Log.d(TAG, 'SM resumed recv=${streamState.lastReceivedStanza} ackSent=$lastAckSent');
   }
 
@@ -222,6 +230,9 @@ class StreamManagementModule extends Negotiator {
     lastAckSent = streamState.lastReceivedStanza;
     Log.d(TAG, 'SM ack send h=$lastAckSent lastRecv=${streamState.lastReceivedStanza}');
     _connection.writeNonza(ANonza(lastAckSent));
+    if (ackTurnedOn && streamState.nonConfirmedSentStanzas.isNotEmpty) {
+      _connection.writeNonza(RNonza());
+    }
   }
 
   void tryToResumeStream() {
@@ -244,5 +255,20 @@ class StreamManagementModule extends Negotiator {
   void reset() {
     negotiatorStateStreamController = StreamController();
     backToIdle();
+  }
+
+  void _schedulePendingAckRequest() {
+    if (!ackTurnedOn) {
+      return;
+    }
+    if (_pendingAckRequestTimer?.isActive == true) {
+      return;
+    }
+    _pendingAckRequestTimer = Timer(_pendingAckRequestDelay, () {
+      _pendingAckRequestTimer = null;
+      if (streamState.nonConfirmedSentStanzas.isNotEmpty) {
+        sendAckRequest();
+      }
+    });
   }
 }

@@ -4,7 +4,7 @@ Agent should pick a single item from this list and proceed with it. If
 it can be handled, do so, mark the item done with a tick, and
 commit (but do not push) the result. Always test with flutter analyze, flutter test, and dart tests within the xmpp_stone package prior to committing!
 
-* SM should not be pinging every 5 seconds. Instead, it should ping every 5 minutes, or on network change. However, if there are outstanding unacknowledged stanzas, it should ping within 15 seconds. (So, send a stanza, start a timer for 15 second if one doesn't already exist). If there are unacknowledged received stanzas when sending an </a>, we should unilaterally send the <r/> to acknowledge them at the same time.
+* ✓ SM should not be pinging every 5 seconds. Instead, it should ping every 5 minutes, or on network change. However, if there are outstanding unacknowledged stanzas, it should ping within 15 seconds. (So, send a stanza, start a timer for 15 second if one doesn't already exist). If there are unacknowledged received stanzas when sending an </a>, we should unilaterally send the <r/> to acknowledge them at the same time.
 * Implement roster versioning - XEP-0237
 * Message editing - XEP-0308
 * Message Replies
