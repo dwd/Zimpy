@@ -26,7 +26,7 @@ class NotificationService {
       linux: linuxSettings,
     );
     try {
-      await _plugin.initialize(settings);
+      await _plugin.initialize(settings: settings);
       if (Platform.isAndroid) {
         await _plugin
             .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
@@ -71,7 +71,12 @@ class NotificationService {
       linux: linuxDetails,
     );
     try {
-      await _plugin.show(id, title, body, details);
+      await _plugin.show(
+        id: id,
+        title: title,
+        body: body,
+        notificationDetails: details,
+      );
     } catch (error) {
       if (error.toString().contains('LateInitializationError')) {
         // Ignore in tests or unsupported environments.
