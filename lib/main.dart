@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xmpp_stone/xmpp_stone.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -2741,6 +2742,180 @@ class _PresenceMenu extends StatelessWidget {
     return prefs.getBool(_sentryOptInKey) ?? false;
   }
 
+  Future<void> _editProfile(BuildContext context) async {
+    final selfJid = service.currentUserBareJid;
+    if (selfJid == null || selfJid.isEmpty) {
+      return;
+    }
+    final nameController = TextEditingController(text: service.displayNameFor(selfJid));
+    Uint8List? avatarBytes = service.avatarBytesFor(selfJid);
+    String? avatarMimeType;
+    var clearAvatar = false;
+    var saving = false;
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(builder: (context, setState) {
+          return AlertDialog(
+            title: const Text('Edit profile'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircleAvatar(
+                    radius: 32,
+                    backgroundImage: avatarBytes != null ? MemoryImage(avatarBytes!) : null,
+                    child: avatarBytes == null ? const Icon(Icons.person, size: 32) : null,
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: nameController,
+                    decoration: const InputDecoration(
+                      labelText: 'Display name',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: saving
+                            ? null
+                            : () async {
+                                final result = await FilePicker.platform.pickFiles(
+                                  type: FileType.image,
+                                  withData: true,
+                                );
+                                if (result == null || result.files.isEmpty) {
+                                  return;
+                                }
+                                final file = result.files.first;
+                                final bytes = await _readPickedFileBytes(file);
+                                if (bytes == null || bytes.isEmpty) {
+                                  return;
+                                }
+                                setState(() {
+                                  avatarBytes = bytes;
+                                  avatarMimeType = _guessImageMimeType(file.name);
+                                  clearAvatar = false;
+                                });
+                              },
+                        icon: const Icon(Icons.image),
+                        label: const Text('Choose file'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: saving
+                            ? null
+                            : () async {
+                                final picker = ImagePicker();
+                                final picked = await picker.pickImage(source: ImageSource.camera);
+                                if (picked == null) {
+                                  return;
+                                }
+                                final bytes = await picked.readAsBytes();
+                                if (bytes.isEmpty) {
+                                  return;
+                                }
+                                setState(() {
+                                  avatarBytes = bytes;
+                                  avatarMimeType = _guessImageMimeType(picked.path);
+                                  clearAvatar = false;
+                                });
+                              },
+                        icon: const Icon(Icons.photo_camera),
+                        label: const Text('Take photo'),
+                      ),
+                      TextButton(
+                        onPressed: saving
+                            ? null
+                            : () {
+                                setState(() {
+                                  avatarBytes = null;
+                                  avatarMimeType = null;
+                                  clearAvatar = true;
+                                });
+                              },
+                        child: const Text('Clear photo'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: saving ? null : () => Navigator.of(context).pop(),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: saving
+                    ? null
+                    : () async {
+                        setState(() => saving = true);
+                        final error = await service.updateSelfVcard(
+                          displayName: nameController.text,
+                          avatarBytes: avatarBytes,
+                          avatarMimeType: avatarMimeType,
+                          clearAvatar: clearAvatar,
+                        );
+                        if (context.mounted) {
+                          if (error != null) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text(error)),
+                            );
+                          } else {
+                            Navigator.of(context).pop();
+                          }
+                        }
+                        if (context.mounted) {
+                          setState(() => saving = false);
+                        }
+                      },
+                child: const Text('Save'),
+              ),
+            ],
+          );
+        });
+      },
+    );
+  }
+
+  Future<Uint8List?> _readPickedFileBytes(PlatformFile file) async {
+    if (file.bytes != null) {
+      return file.bytes;
+    }
+    final path = file.path;
+    if (path == null || path.isEmpty) {
+      return null;
+    }
+    try {
+      return await File(path).readAsBytes();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String? _guessImageMimeType(String fileName) {
+    final parts = fileName.toLowerCase().split('.');
+    if (parts.length < 2) {
+      return null;
+    }
+    switch (parts.last) {
+      case 'png':
+        return 'image/png';
+      case 'jpg':
+      case 'jpeg':
+        return 'image/jpeg';
+      case 'gif':
+        return 'image/gif';
+      case 'webp':
+        return 'image/webp';
+      default:
+        return null;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -2778,6 +2953,9 @@ class _PresenceMenu extends StatelessWidget {
               service.setSelfPresence(show: service.selfPresence.showElement ?? PresenceShowElement.CHAT, status: status);
             }
             break;
+          case _PresenceAction.editProfile:
+            await _editProfile(context);
+            break;
           case _PresenceAction.clearCacheExit:
             onClearCacheExit?.call();
             break;
@@ -2808,6 +2986,7 @@ class _PresenceMenu extends StatelessWidget {
             const PopupMenuItem(value: _PresenceAction.xa, child: Text('Extended away')),
             const PopupMenuDivider(),
             const PopupMenuItem(value: _PresenceAction.setStatus, child: Text('Set status message...')),
+            const PopupMenuItem(value: _PresenceAction.editProfile, child: Text('Edit profile...')),
             PopupMenuItem(
               value: _PresenceAction.toggleSentry,
               child: Text(sentryEnabled ? 'Disable crash reporting' : 'Enable crash reporting'),
@@ -2834,6 +3013,7 @@ enum _PresenceAction {
   dnd,
   xa,
   setStatus,
+  editProfile,
   toggleSentry,
   simulateDisconnect,
   clearCacheExit,

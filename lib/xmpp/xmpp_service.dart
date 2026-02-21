@@ -15,6 +15,7 @@ import 'blocking.dart';
 import 'http_upload.dart';
 import 'muc_invite.dart';
 import 'muc_self_ping.dart';
+import 'vcard_utils.dart';
 import 'ws_endpoint.dart';
 import 'srv_lookup.dart';
 import 'alt_connection.dart';
@@ -153,7 +154,8 @@ class XmppService extends ChangeNotifier {
   final Map<String, String> _vcardAvatarState = {};
   final Set<String> _vcardRequests = {};
   static const _vcardNoAvatar = 'none';
-  static const _vcardUnknown = 'unknown';
+  String _selfVcardPhotoHash = '';
+  bool _selfVcardPhotoKnown = false;
 
   XmppStatus get status => _status;
   String? get errorMessage => _errorMessage;
@@ -906,6 +908,7 @@ class XmppService extends ChangeNotifier {
     _contacts.sort((a, b) => a.displayName.compareTo(b.displayName));
     notifyListeners();
     _rosterPersistor?.call(List.unmodifiable(_contacts));
+    _requestVcardDetails(normalized, preferName: name == null || name.trim().isEmpty);
     return true;
   }
 
@@ -1299,6 +1302,7 @@ class XmppService extends ChangeNotifier {
             subscriptionType: subscriptionType,
           );
           _pepManager?.requestMetadataIfMissing(jid);
+          _requestVcardDetails(jid, preferName: buddy.name == null || buddy.name!.trim().isEmpty);
         }
       }
       final nextVersion = rosterManager.rosterVersion;
@@ -3458,6 +3462,8 @@ class XmppService extends ChangeNotifier {
     _roomLastTrafficAt.clear();
     _roomLastPingAt.clear();
     _blockingHandlerRegistered = false;
+    _selfVcardPhotoHash = '';
+    _selfVcardPhotoKnown = false;
 
     _activeChatBareJid = null;
     _currentUserBareJid = null;
@@ -3593,6 +3599,14 @@ class XmppService extends ChangeNotifier {
   XmppElement _buildVcardUpdateElement() {
     final update = XmppElement()..name = 'x';
     update.addAttribute(XmppAttribute('xmlns', 'vcard-temp:x:update'));
+    final hash = _selfVcardPhotoHash.trim();
+    if (hash.isNotEmpty || _selfVcardPhotoKnown) {
+      final photo = XmppElement()..name = 'photo';
+      if (hash.isNotEmpty) {
+        photo.textValue = hash;
+      }
+      update.addChild(photo);
+    }
     return update;
   }
 
@@ -3919,6 +3933,10 @@ class XmppService extends ChangeNotifier {
   }
 
   void _requestVcardAvatar(String bareJid) {
+    _requestVcardDetails(bareJid, preferName: false);
+  }
+
+  void _requestVcardDetails(String bareJid, {required bool preferName}) {
     final connection = _connection;
     final storage = _storage;
     if (connection == null || storage == null) {
@@ -3929,16 +3947,20 @@ class XmppService extends ChangeNotifier {
     }
     _vcardRequests.add(bareJid);
     final manager = VCardManager.getInstance(connection);
-    manager.getVCardFor(Jid.fromFullJid(bareJid)).then((vcard) {
+    manager.getVCardFor(Jid.fromFullJid(bareJid)).then((vcard) async {
+      _vcardRequests.remove(bareJid);
+      if (vcard is InvalidVCard) {
+        return;
+      }
+      _applyVcardToContact(bareJid, vcard, preferName: preferName);
       final bytes = vcard.imageData;
       if (bytes is List<int> && bytes.isNotEmpty) {
         final data = base64Encode(bytes);
         _vcardAvatarBytes[bareJid] = Uint8List.fromList(bytes);
         storage.storeVcardAvatar(bareJid, data);
-        if (!_vcardAvatarState.containsKey(bareJid)) {
-          _vcardAvatarState[bareJid] = _vcardUnknown;
-          storage.storeVcardAvatarState(bareJid, _vcardUnknown);
-        }
+        final hash = await vcardPhotoHash(Uint8List.fromList(bytes));
+        _vcardAvatarState[bareJid] = hash;
+        storage.storeVcardAvatarState(bareJid, hash);
         notifyListeners();
       } else {
         _vcardAvatarBytes.remove(bareJid);
@@ -3948,8 +3970,30 @@ class XmppService extends ChangeNotifier {
         notifyListeners();
       }
     }).catchError((_) {
-      // Ignore errors for missing vCards.
+      _vcardRequests.remove(bareJid);
     });
+  }
+
+  void _applyVcardToContact(String bareJid, VCard vcard, {required bool preferName}) {
+    if (!preferName) {
+      return;
+    }
+    final name = vcardDisplayName(vcard);
+    if (name.isEmpty) {
+      return;
+    }
+    final index = _contacts.indexWhere((entry) => entry.jid == bareJid);
+    if (index == -1) {
+      return;
+    }
+    final existing = _contacts[index];
+    if (existing.name != null && existing.name!.trim().isNotEmpty) {
+      return;
+    }
+    _contacts[index] = existing.copyWith(name: name);
+    _contacts.sort((a, b) => a.displayName.compareTo(b.displayName));
+    notifyListeners();
+    _rosterPersistor?.call(List.unmodifiable(_contacts));
   }
 
   void _handleVcardPresenceUpdate(PresenceStanza stanza) {
@@ -3988,6 +4032,72 @@ class XmppService extends ChangeNotifier {
     storage.storeVcardAvatarState(bareJid, hash);
     _vcardRequests.remove(bareJid);
     _requestVcardAvatar(bareJid);
+  }
+
+  Future<String?> updateSelfVcard({
+    required String displayName,
+    Uint8List? avatarBytes,
+    String? avatarMimeType,
+    bool clearAvatar = false,
+  }) async {
+    final connection = _connection;
+    final storage = _storage;
+    final selfBareJid = _currentUserBareJid;
+    if (connection == null || storage == null || selfBareJid == null) {
+      return 'Not connected.';
+    }
+    final name = displayName.trim();
+    final bytes = clearAvatar ? null : avatarBytes;
+    final vcard = buildVcardElement(
+      displayName: name,
+      avatarBytes: bytes,
+      avatarMimeType: avatarMimeType,
+    );
+    final iq = IqStanza(AbstractStanza.getRandomId(), IqStanzaType.SET);
+    iq.toJid = Jid.fromFullJid(selfBareJid);
+    iq.addChild(vcard);
+    final result = await _sendIqAndAwait(iq);
+    if (result?.type != IqStanzaType.RESULT) {
+      return 'Failed to publish vCard.';
+    }
+    if (name.isNotEmpty) {
+      _applySelfDisplayName(name);
+    }
+    if (bytes != null && bytes.isNotEmpty) {
+      final hash = await vcardPhotoHash(bytes);
+      _selfVcardPhotoHash = hash;
+      _selfVcardPhotoKnown = true;
+      _vcardAvatarBytes[selfBareJid] = bytes;
+      storage.storeVcardAvatar(selfBareJid, base64Encode(bytes));
+      _vcardAvatarState[selfBareJid] = hash;
+      storage.storeVcardAvatarState(selfBareJid, hash);
+    } else if (clearAvatar) {
+      _selfVcardPhotoHash = '';
+      _selfVcardPhotoKnown = true;
+      _vcardAvatarBytes.remove(selfBareJid);
+      _vcardAvatarState[selfBareJid] = _vcardNoAvatar;
+      storage.storeVcardAvatarState(selfBareJid, _vcardNoAvatar);
+      storage.removeVcardAvatar(selfBareJid);
+    }
+    _sendPresence(_selfPresence);
+    notifyListeners();
+    return null;
+  }
+
+  void _applySelfDisplayName(String name) {
+    final selfBareJid = _currentUserBareJid;
+    if (selfBareJid == null) {
+      return;
+    }
+    final index = _contacts.indexWhere((entry) => entry.jid == selfBareJid);
+    if (index == -1) {
+      _contacts.add(ContactEntry(jid: selfBareJid, name: name));
+    } else {
+      final existing = _contacts[index];
+      _contacts[index] = existing.copyWith(name: name);
+    }
+    _contacts.sort((a, b) => a.displayName.compareTo(b.displayName));
+    _rosterPersistor?.call(List.unmodifiable(_contacts));
   }
 
   String? _vcardJidFromPresence(PresenceStanza stanza) {
