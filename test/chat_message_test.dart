@@ -35,4 +35,22 @@ void main() {
 
     expect(roundtrip, isNull);
   });
+
+  test('ChatMessage accepts invite without body when raw XML present', () {
+    final roundtrip = ChatMessage.fromMap({
+      'from': 'alice@example.com',
+      'to': 'bob@example.com',
+      'body': '',
+      'timestamp': '2024-08-09T10:11:12Z',
+      'outgoing': false,
+      'messageId': 'msg-2',
+      'rawXml': '<message id="msg-2"/>',
+      'inviteRoomJid': 'room@example.com',
+      'inviteReason': 'Join us',
+    });
+
+    expect(roundtrip, isNotNull);
+    expect(roundtrip!.inviteRoomJid, 'room@example.com');
+    expect(roundtrip.inviteReason, 'Join us');
+  });
 }

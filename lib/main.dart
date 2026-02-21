@@ -947,7 +947,7 @@ class _WimsyHomeState extends State<WimsyHome> {
                                         if (latest != null) ...[
                                           const SizedBox(height: 2),
                                           Text(
-                                            latest.body,
+                                            _messagePreviewText(service, latest),
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
                                             style: theme.textTheme.bodySmall?.copyWith(
@@ -1073,6 +1073,12 @@ class _WimsyHomeState extends State<WimsyHome> {
                     ],
                   ),
                 ),
+                if (isBookmark && (roomEntry?.joined ?? false))
+                  IconButton(
+                    onPressed: () => _showInviteDialog(activeChat),
+                    icon: const Icon(Icons.person_add),
+                    tooltip: 'Invite to room',
+                  ),
               ],
             ),
           ),
@@ -1098,11 +1104,28 @@ class _WimsyHomeState extends State<WimsyHome> {
                               : service.displayNameFor(message.from);
                       final timestamp = _formatTimestamp(message.timestamp);
                       final avatarBytes = isBookmark ? null : service.avatarBytesFor(message.from);
+                      final inviteRoomJid = message.inviteRoomJid;
+                      final inviteRoomName = inviteRoomJid == null || inviteRoomJid.isEmpty
+                          ? null
+                          : service.displayNameFor(inviteRoomJid);
+                      final inviteAvatarBytes = inviteRoomJid == null || inviteRoomJid.isEmpty
+                          ? null
+                          : service.avatarBytesFor(inviteRoomJid);
+                      final joinRoom = (inviteRoomJid != null &&
+                              inviteRoomJid.isNotEmpty &&
+                              !message.outgoing)
+                          ? () => service.joinRoom(inviteRoomJid, password: message.invitePassword)
+                          : null;
                       return _MessageBubble(
                         message: message,
                         senderName: senderName,
                         timestamp: timestamp,
                         avatarBytes: avatarBytes,
+                        inviteRoomJid: inviteRoomJid,
+                        inviteRoomName: inviteRoomName,
+                        inviteAvatarBytes: inviteAvatarBytes,
+                        inviteReason: message.inviteReason,
+                        onJoinInvite: joinRoom,
                         onReact: (emoji) {
                           service.sendReaction(
                             bareJid: activeChat,
@@ -1377,6 +1400,72 @@ class _WimsyHomeState extends State<WimsyHome> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
     );
+  }
+
+  Future<void> _showInviteDialog(String? roomJid) async {
+    if (roomJid == null || roomJid.trim().isEmpty) {
+      return;
+    }
+    final jidController = TextEditingController();
+    final reasonController = TextEditingController();
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Invite to room'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: jidController,
+                  decoration: const InputDecoration(
+                    labelText: 'Invitee JID',
+                    hintText: 'user@example.com',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: reasonController,
+                  decoration: const InputDecoration(
+                    labelText: 'Reason (optional)',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Send invite'),
+            ),
+          ],
+        );
+      },
+    );
+    if (result != true || !mounted) {
+      return;
+    }
+    final invitee = jidController.text.trim();
+    if (invitee.isEmpty) {
+      _showSnack('Invitee JID required.');
+      return;
+    }
+    final error = await widget.service.inviteToRoom(
+      roomJid: roomJid,
+      inviteeJid: invitee,
+      reason: reasonController.text,
+    );
+    if (!mounted) {
+      return;
+    }
+    if (error != null) {
+      _showSnack(error);
+    }
   }
 
   Future<void> _showContactDialog({ContactEntry? contact}) async {
@@ -1908,12 +1997,31 @@ class _WimsyHomeState extends State<WimsyHome> {
   }
 }
 
+String _messagePreviewText(XmppService service, ChatMessage message) {
+  final inviteRoomJid = message.inviteRoomJid;
+  if (inviteRoomJid != null && inviteRoomJid.isNotEmpty) {
+    final roomName = service.displayNameFor(inviteRoomJid);
+    return 'Invitation to $roomName';
+  }
+  final body = message.body.trim();
+  if (body.isNotEmpty) {
+    return body;
+  }
+  final oob = message.oobUrl?.trim() ?? '';
+  return oob.isNotEmpty ? oob : 'Message';
+}
+
 class _MessageBubble extends StatelessWidget {
   const _MessageBubble({
     required this.message,
     required this.senderName,
     required this.timestamp,
     required this.avatarBytes,
+    required this.inviteRoomJid,
+    required this.inviteRoomName,
+    required this.inviteAvatarBytes,
+    required this.inviteReason,
+    required this.onJoinInvite,
     required this.onReact,
   });
 
@@ -1921,6 +2029,11 @@ class _MessageBubble extends StatelessWidget {
   final String senderName;
   final String timestamp;
   final Uint8List? avatarBytes;
+  final String? inviteRoomJid;
+  final String? inviteRoomName;
+  final Uint8List? inviteAvatarBytes;
+  final String? inviteReason;
+  final VoidCallback? onJoinInvite;
   final void Function(String emoji)? onReact;
 
   static const List<String> _reactionOptions = [
@@ -1942,6 +2055,7 @@ class _MessageBubble extends StatelessWidget {
         ? textColor.withValues(alpha: 0.85)
         : xep0392ColorForLabel(senderName);
     final oobImage = _buildOobImage(context);
+    final inviteCard = _buildInviteCard(context);
     final reactions = message.reactions ?? const {};
 
     return GestureDetector(
@@ -1987,6 +2101,10 @@ class _MessageBubble extends StatelessWidget {
                     ],
                   ),
                 const SizedBox(height: 6),
+                if (inviteCard != null) ...[
+                  inviteCard,
+                  const SizedBox(height: 8),
+                ],
                 if (oobImage != null) ...[
                   oobImage,
                   const SizedBox(height: 8),
@@ -2127,6 +2245,59 @@ class _MessageBubble extends StatelessWidget {
       return true;
     }
     return _normalizeUrl(trimmed) != _normalizeUrl(rawOob);
+  }
+
+  Widget? _buildInviteCard(BuildContext context) {
+    final roomJid = inviteRoomJid;
+    if (roomJid == null || roomJid.isEmpty) {
+      return null;
+    }
+    final theme = Theme.of(context);
+    final title = inviteRoomName?.isNotEmpty == true ? inviteRoomName! : roomJid;
+    final subtitle = inviteReason?.isNotEmpty == true ? inviteReason! : roomJid;
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      padding: const EdgeInsets.all(12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _AvatarPlaceholder(label: title, bytes: inviteAvatarBytes),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: theme.textTheme.titleSmall,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  subtitle,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                if (onJoinInvite != null) ...[
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: FilledButton(
+                      onPressed: onJoinInvite,
+                      child: const Text('Join'),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget? _buildOobImage(BuildContext context) {

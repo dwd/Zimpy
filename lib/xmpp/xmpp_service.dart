@@ -12,6 +12,7 @@ import '../pep/pep_manager.dart';
 import '../pep/pep_caps_manager.dart';
 import '../storage/storage_service.dart';
 import 'http_upload.dart';
+import 'muc_invite.dart';
 import 'ws_endpoint.dart';
 import 'srv_lookup.dart';
 import 'alt_connection.dart';
@@ -1000,6 +1001,80 @@ class XmppService extends ChangeNotifier {
       timestamp: DateTime.now(),
       messageId: messageId,
     );
+  }
+
+  Future<String?> inviteToRoom({
+    required String roomJid,
+    required String inviteeJid,
+    String? reason,
+  }) async {
+    final connection = _connection;
+    if (connection == null || _currentUserBareJid == null) {
+      return 'Not connected.';
+    }
+    final normalizedRoom = _bareJid(roomJid);
+    final normalizedInvitee = _bareJid(inviteeJid);
+    if (normalizedRoom.isEmpty || normalizedInvitee.isEmpty) {
+      return 'Invalid JID.';
+    }
+    final inviteReason = reason?.trim();
+    final invitePassword = _roomPasswordFor(normalizedRoom);
+
+    final directId = AbstractStanza.getRandomId();
+    final directStanza = MessageStanza(directId, MessageStanzaType.NORMAL);
+    directStanza.toJid = Jid.fromFullJid(normalizedInvitee);
+    final direct = XmppElement()..name = 'x';
+    direct.addAttribute(XmppAttribute('xmlns', mucDirectInviteNamespace));
+    direct.addAttribute(XmppAttribute('jid', normalizedRoom));
+    if (inviteReason != null && inviteReason.isNotEmpty) {
+      direct.addAttribute(XmppAttribute('reason', inviteReason));
+    }
+    if (invitePassword != null && invitePassword.isNotEmpty) {
+      direct.addAttribute(XmppAttribute('password', invitePassword));
+    }
+    directStanza.addChild(direct);
+    connection.writeStanza(directStanza);
+
+    final rawXml = _serializeStanza(directStanza);
+    _addMessage(
+      bareJid: normalizedInvitee,
+      from: _currentUserBareJid ?? '',
+      to: normalizedInvitee,
+      body: '',
+      rawXml: rawXml,
+      outgoing: true,
+      timestamp: DateTime.now(),
+      messageId: directId,
+      inviteRoomJid: normalizedRoom,
+      inviteReason: inviteReason,
+      invitePassword: invitePassword,
+    );
+
+    final roomEntry = _rooms[normalizedRoom];
+    if (roomEntry != null && roomEntry.joined) {
+      final mediatedId = AbstractStanza.getRandomId();
+      final mediated = MessageStanza(mediatedId, MessageStanzaType.NORMAL);
+      mediated.toJid = Jid.fromFullJid(normalizedRoom);
+      final mucUser = XmppElement()..name = 'x';
+      mucUser.addAttribute(XmppAttribute('xmlns', 'http://jabber.org/protocol/muc#user'));
+      final invite = XmppElement()..name = 'invite';
+      invite.addAttribute(XmppAttribute('to', normalizedInvitee));
+      if (inviteReason != null && inviteReason.isNotEmpty) {
+        final reasonElement = XmppElement()..name = 'reason';
+        reasonElement.textValue = inviteReason;
+        invite.addChild(reasonElement);
+      }
+      if (invitePassword != null && invitePassword.isNotEmpty) {
+        final password = XmppElement()..name = 'password';
+        password.textValue = invitePassword;
+        invite.addChild(password);
+      }
+      mucUser.addChild(invite);
+      mediated.addChild(mucUser);
+      connection.writeStanza(mediated);
+    }
+
+    return null;
   }
 
   Future<String?> sendFile({
@@ -2261,6 +2336,7 @@ class XmppService extends ChangeNotifier {
       final oobUrl = _extractOobUrlFromStanza(message.messageStanza);
       final rawXml = _serializeStanza(message.messageStanza);
       final reaction = _extractReactionUpdate(message.messageStanza);
+      final invite = parseMucDirectInvite(message.messageStanza);
       if (reaction != null) {
         final targetBare = _reactionChatTarget(from, to);
         if (targetBare.isNotEmpty) {
@@ -2268,7 +2344,9 @@ class XmppService extends ChangeNotifier {
         }
         return;
       }
-      if (body.trim().isEmpty && (oobUrl == null || oobUrl.isEmpty)) {
+      if (body.trim().isEmpty &&
+          (oobUrl == null || oobUrl.isEmpty) &&
+          invite == null) {
         return;
       }
       final outgoing = from == (_currentUserBareJid ?? '');
@@ -2284,6 +2362,9 @@ class XmppService extends ChangeNotifier {
         messageId: message.messageId,
         mamId: message.mamResultId,
         stanzaId: message.stanzaId,
+        inviteRoomJid: invite?.roomJid,
+        inviteReason: invite?.reason,
+        invitePassword: invite?.password,
       );
     });
 
@@ -2307,6 +2388,9 @@ class XmppService extends ChangeNotifier {
     String? mamId,
     String? stanzaId,
     String? oobUrl,
+    String? inviteRoomJid,
+    String? inviteReason,
+    String? invitePassword,
   }) {
     final normalized = _bareJid(bareJid);
     _ensureContact(normalized);
@@ -2322,10 +2406,19 @@ class XmppService extends ChangeNotifier {
             (stanzaId != null && stanzaId.isNotEmpty) ? stanzaId : existing.stanzaId;
         final nextOobUrl = (oobUrl != null && oobUrl.isNotEmpty) ? oobUrl : existing.oobUrl;
         final nextRawXml = rawXml.isNotEmpty ? rawXml : existing.rawXml;
+        final nextInviteRoomJid =
+            (inviteRoomJid != null && inviteRoomJid.isNotEmpty) ? inviteRoomJid : existing.inviteRoomJid;
+        final nextInviteReason =
+            (inviteReason != null && inviteReason.isNotEmpty) ? inviteReason : existing.inviteReason;
+        final nextInvitePassword =
+            (invitePassword != null && invitePassword.isNotEmpty) ? invitePassword : existing.invitePassword;
         if (nextMamId != existing.mamId ||
             nextStanzaId != existing.stanzaId ||
             nextOobUrl != existing.oobUrl ||
-            nextRawXml != existing.rawXml) {
+            nextRawXml != existing.rawXml ||
+            nextInviteRoomJid != existing.inviteRoomJid ||
+            nextInviteReason != existing.inviteReason ||
+            nextInvitePassword != existing.invitePassword) {
           list[existingIndex] = ChatMessage(
             from: existing.from,
             to: existing.to,
@@ -2337,6 +2430,9 @@ class XmppService extends ChangeNotifier {
             stanzaId: nextStanzaId,
             oobUrl: nextOobUrl,
             rawXml: nextRawXml,
+            inviteRoomJid: nextInviteRoomJid,
+            inviteReason: nextInviteReason,
+            invitePassword: nextInvitePassword,
             reactions: existing.reactions ?? const {},
             acked: existing.acked,
             receiptReceived: existing.receiptReceived,

@@ -10,6 +10,9 @@ class ChatMessage {
     this.stanzaId,
     this.oobUrl,
     this.rawXml,
+    this.inviteRoomJid,
+    this.inviteReason,
+    this.invitePassword,
     this.reactions,
     this.acked = false,
     this.receiptReceived = false,
@@ -26,6 +29,9 @@ class ChatMessage {
   final String? stanzaId;
   final String? oobUrl;
   final String? rawXml;
+  final String? inviteRoomJid;
+  final String? inviteReason;
+  final String? invitePassword;
   final Map<String, List<String>>? reactions;
   final bool acked;
   final bool receiptReceived;
@@ -43,6 +49,9 @@ class ChatMessage {
       'stanzaId': stanzaId,
       'oobUrl': oobUrl,
       'rawXml': rawXml,
+      'inviteRoomJid': inviteRoomJid,
+      'inviteReason': inviteReason,
+      'invitePassword': invitePassword,
       'reactions': reactions ?? const {},
       'acked': acked,
       'receiptReceived': receiptReceived,
@@ -64,6 +73,9 @@ class ChatMessage {
     final stanzaId = map['stanzaId']?.toString();
     final oobUrl = map['oobUrl']?.toString();
     final rawXml = map['rawXml']?.toString();
+    final inviteRoomJid = map['inviteRoomJid']?.toString();
+    final inviteReason = map['inviteReason']?.toString();
+    final invitePassword = map['invitePassword']?.toString();
     final reactions = _parseReactions(map['reactions']);
     final acked = map['acked'] == true;
     final receiptReceived = map['receiptReceived'] == true;
@@ -71,7 +83,8 @@ class ChatMessage {
     final hasBody = body.isNotEmpty;
     final hasOobUrl = oobUrl != null && oobUrl.isNotEmpty;
     final hasRawXml = rawXml != null && rawXml.isNotEmpty;
-    if (from.isEmpty || to.isEmpty || ts.isEmpty || !hasRawXml || (!hasBody && !hasOobUrl)) {
+    final hasInvite = inviteRoomJid != null && inviteRoomJid.isNotEmpty;
+    if (from.isEmpty || to.isEmpty || ts.isEmpty || !hasRawXml || (!hasBody && !hasOobUrl && !hasInvite)) {
       return null;
     }
     final timestamp = DateTime.tryParse(ts);
@@ -89,6 +102,9 @@ class ChatMessage {
       stanzaId: stanzaId,
       oobUrl: oobUrl,
       rawXml: rawXml,
+      inviteRoomJid: inviteRoomJid,
+      inviteReason: inviteReason,
+      invitePassword: invitePassword,
       reactions: reactions,
       acked: acked,
       receiptReceived: receiptReceived,
