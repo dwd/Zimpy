@@ -11,6 +11,7 @@ import '../bookmarks/bookmarks_manager.dart';
 import '../pep/pep_manager.dart';
 import '../pep/pep_caps_manager.dart';
 import '../storage/storage_service.dart';
+import 'blocking.dart';
 import 'http_upload.dart';
 import 'muc_invite.dart';
 import 'muc_self_ping.dart';
@@ -140,6 +141,8 @@ class XmppService extends ChangeNotifier {
   String? _httpUploadServiceJid;
   bool _pepVcardConversionSupported = false;
   String _lastSelfAvatarHash = '';
+  bool _blockingSupported = false;
+  bool _blockingHandlerRegistered = false;
   final Set<String> _blockedJids = {};
   static const String _blockListName = 'wimsy-blocked';
   MucManager? _mucManager;
@@ -575,6 +578,9 @@ class XmppService extends ChangeNotifier {
           _pepVcardConversionSupported = connection.getSupportedFeatures().any(
             (feature) => feature.xmppVar == 'urn:xmpp:pep-vcard-conversion:0',
           );
+          _blockingSupported = connection.getSupportedFeatures().any(
+            (feature) => feature.xmppVar == blockingNamespace,
+          );
           _setupRoster();
           _setupChatManager();
           _setupMuc();
@@ -584,7 +590,7 @@ class XmppService extends ChangeNotifier {
           _setupDeliveryTracking();
           _setupPep();
           _setupBookmarks();
-          _setupPrivacyLists();
+          _setupBlocking();
           _setupDisplayedSync();
           _primeMamSync();
           _sendInitialPresence();
@@ -944,6 +950,14 @@ class XmppService extends ChangeNotifier {
     if (normalized.isEmpty) {
       return false;
     }
+    if (_blockingSupported) {
+      final success = await _sendBlock(normalized);
+      if (success) {
+        _blockedJids.add(normalized);
+        notifyListeners();
+      }
+      return success;
+    }
     _blockedJids.add(normalized);
     return _applyBlockList();
   }
@@ -952,6 +966,14 @@ class XmppService extends ChangeNotifier {
     final normalized = _bareJid(bareJid);
     if (normalized.isEmpty) {
       return false;
+    }
+    if (_blockingSupported) {
+      final success = await _sendUnblock(normalized);
+      if (success) {
+        _blockedJids.remove(normalized);
+        notifyListeners();
+      }
+      return success;
     }
     _blockedJids.remove(normalized);
     return _applyBlockList();
@@ -2250,6 +2272,126 @@ class XmppService extends ChangeNotifier {
     _refreshBlockList();
   }
 
+  void _setupBlocking() {
+    final connection = _connection;
+    if (connection == null) {
+      return;
+    }
+    if (_blockingSupported) {
+      _registerBlockingHandler(connection);
+      _refreshBlockingList();
+      return;
+    }
+    _setupPrivacyLists();
+  }
+
+  void _registerBlockingHandler(Connection connection) {
+    if (_blockingHandlerRegistered) {
+      return;
+    }
+    _blockingHandlerRegistered = true;
+    final router = IqRouter.getInstance(connection);
+    router.registerNamespaceHandler(blockingNamespace, _handleBlockingIq);
+  }
+
+  Future<IqStanza?> _handleBlockingIq(IqStanza request) async {
+    if (request.type != IqStanzaType.GET && request.type != IqStanzaType.SET) {
+      return null;
+    }
+    final response = IqStanza(request.id, IqStanzaType.RESULT);
+    if (request.type == IqStanzaType.GET) {
+      final blocklist = XmppElement()..name = 'blocklist';
+      blocklist.addAttribute(XmppAttribute('xmlns', blockingNamespace));
+      for (final jid in _blockedJids) {
+        final item = XmppElement()..name = 'item';
+        item.addAttribute(XmppAttribute('jid', jid));
+        blocklist.addChild(item);
+      }
+      response.addChild(blocklist);
+      return response;
+    }
+    final update = parseBlockingUpdate(request);
+    if (update == null) {
+      return response;
+    }
+    if (update.isBlock) {
+      _blockedJids.addAll(update.items);
+    } else {
+      if (update.items.isEmpty) {
+        _blockedJids.clear();
+      } else {
+        _blockedJids.removeAll(update.items);
+      }
+    }
+    notifyListeners();
+    return response;
+  }
+
+  Future<void> _refreshBlockingList() async {
+    final list = await _requestBlocklist();
+    if (list == null) {
+      return;
+    }
+    _blockedJids
+      ..clear()
+      ..addAll(list);
+    notifyListeners();
+  }
+
+  Future<List<String>?> _requestBlocklist() async {
+    final connection = _connection;
+    if (connection == null) {
+      return null;
+    }
+    final id = AbstractStanza.getRandomId();
+    final iq = IqStanza(id, IqStanzaType.GET);
+    iq.toJid = Jid.fromFullJid(connection.serverName.userAtDomain);
+    final blocklist = XmppElement()..name = 'blocklist';
+    blocklist.addAttribute(XmppAttribute('xmlns', blockingNamespace));
+    iq.addChild(blocklist);
+    final result = await _sendIqAndAwait(iq);
+    if (result == null) {
+      return null;
+    }
+    return parseBlocklistIq(result);
+  }
+
+  Future<bool> _sendBlock(String bareJid) async {
+    final connection = _connection;
+    if (connection == null) {
+      return false;
+    }
+    final id = AbstractStanza.getRandomId();
+    final iq = IqStanza(id, IqStanzaType.SET);
+    iq.toJid = Jid.fromFullJid(connection.serverName.userAtDomain);
+    final block = XmppElement()..name = 'block';
+    block.addAttribute(XmppAttribute('xmlns', blockingNamespace));
+    final item = XmppElement()..name = 'item';
+    item.addAttribute(XmppAttribute('jid', bareJid));
+    block.addChild(item);
+    iq.addChild(block);
+    final result = await _sendIqAndAwait(iq);
+    return result?.type == IqStanzaType.RESULT;
+  }
+
+  Future<bool> _sendUnblock(String bareJid) async {
+    final connection = _connection;
+    if (connection == null) {
+      return false;
+    }
+    final id = AbstractStanza.getRandomId();
+    final iq = IqStanza(id, IqStanzaType.SET);
+    iq.toJid = Jid.fromFullJid(connection.serverName.userAtDomain);
+    final unblock = XmppElement()..name = 'unblock';
+    unblock.addAttribute(XmppAttribute('xmlns', blockingNamespace));
+    final item = XmppElement()..name = 'item';
+    item.addAttribute(XmppAttribute('jid', bareJid));
+    unblock.addChild(item);
+    iq.addChild(unblock);
+    final result = await _sendIqAndAwait(iq);
+    return result?.type == IqStanzaType.RESULT;
+  }
+
   Future<void> _refreshBlockList() async {
     final manager = _privacyListsManager;
     if (manager == null || !manager.isPrivacyListsSupported()) {
@@ -3248,6 +3390,7 @@ class XmppService extends ChangeNotifier {
     _chatStateSubscriptions.clear();
     _roomLastTrafficAt.clear();
     _roomLastPingAt.clear();
+    _blockingHandlerRegistered = false;
 
     _activeChatBareJid = null;
     _currentUserBareJid = null;
