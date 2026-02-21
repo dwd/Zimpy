@@ -12,6 +12,7 @@ import '../pep/pep_caps_manager.dart';
 import '../storage/storage_service.dart';
 import 'ws_endpoint.dart';
 import 'srv_lookup.dart';
+import 'alt_connection.dart';
 
 class _ReconnectConfig {
   _ReconnectConfig({
@@ -453,10 +454,6 @@ class XmppService extends ChangeNotifier {
     WsEndpointConfig? wsConfig;
     if (shouldUseWebSocket) {
       wsConfig = parseWsEndpoint(wsEndpoint ?? '');
-      if (wsConfig == null) {
-        _setError('Enter a WebSocket endpoint like wss://host/path.');
-        return;
-      }
     }
 
     final normalized = jid.trim();
@@ -479,6 +476,18 @@ class XmppService extends ChangeNotifier {
         resolvedDirectTls = srvTarget.directTls;
       } else if (resolvedPort == 0 || resolvedPort == 5222) {
         resolvedPort = directTls ? 5223 : 5222;
+      }
+    }
+
+    if (shouldUseWebSocket && wsConfig == null) {
+      final domain = _domainFromBareJid(bareJid);
+      final discovered = await discoverWebSocketEndpoint(domain);
+      if (discovered != null) {
+        wsConfig = parseWsEndpoint(discovered.toString());
+      }
+      if (wsConfig == null) {
+        _setError('Enter a WebSocket endpoint like wss://host/path.');
+        return;
       }
     }
 
