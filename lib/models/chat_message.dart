@@ -13,6 +13,12 @@ class ChatMessage {
     this.inviteRoomJid,
     this.inviteReason,
     this.invitePassword,
+    this.fileTransferId,
+    this.fileName,
+    this.fileSize,
+    this.fileMime,
+    this.fileBytes,
+    this.fileState,
     this.edited = false,
     this.editedAt,
     this.reactions,
@@ -34,6 +40,12 @@ class ChatMessage {
   final String? inviteRoomJid;
   final String? inviteReason;
   final String? invitePassword;
+  final String? fileTransferId;
+  final String? fileName;
+  final int? fileSize;
+  final String? fileMime;
+  final int? fileBytes;
+  final String? fileState;
   final bool edited;
   final DateTime? editedAt;
   final Map<String, List<String>>? reactions;
@@ -56,6 +68,12 @@ class ChatMessage {
       'inviteRoomJid': inviteRoomJid,
       'inviteReason': inviteReason,
       'invitePassword': invitePassword,
+      'fileTransferId': fileTransferId,
+      'fileName': fileName,
+      'fileSize': fileSize,
+      'fileMime': fileMime,
+      'fileBytes': fileBytes,
+      'fileState': fileState,
       'edited': edited,
       'editedAt': editedAt?.toIso8601String(),
       'reactions': reactions ?? const {},
@@ -82,17 +100,30 @@ class ChatMessage {
     final inviteRoomJid = map['inviteRoomJid']?.toString();
     final inviteReason = map['inviteReason']?.toString();
     final invitePassword = map['invitePassword']?.toString();
+    final fileTransferId = map['fileTransferId']?.toString();
+    final fileName = map['fileName']?.toString();
+    final fileSizeRaw = map['fileSize'];
+    final fileBytesRaw = map['fileBytes'];
+    final fileMime = map['fileMime']?.toString();
+    final fileState = map['fileState']?.toString();
     final edited = map['edited'] == true;
     final editedAtRaw = map['editedAt']?.toString();
     final reactions = _parseReactions(map['reactions']);
     final acked = map['acked'] == true;
     final receiptReceived = map['receiptReceived'] == true;
     final displayed = map['displayed'] == true;
+    final fileSize = fileSizeRaw is int ? fileSizeRaw : int.tryParse(fileSizeRaw?.toString() ?? '');
+    final fileBytes = fileBytesRaw is int ? fileBytesRaw : int.tryParse(fileBytesRaw?.toString() ?? '');
     final hasBody = body.isNotEmpty;
     final hasOobUrl = oobUrl != null && oobUrl.isNotEmpty;
     final hasRawXml = rawXml != null && rawXml.isNotEmpty;
     final hasInvite = inviteRoomJid != null && inviteRoomJid.isNotEmpty;
-    if (from.isEmpty || to.isEmpty || ts.isEmpty || !hasRawXml || (!hasBody && !hasOobUrl && !hasInvite)) {
+    final hasFileTransfer = fileTransferId != null && fileTransferId.isNotEmpty;
+    if (from.isEmpty ||
+        to.isEmpty ||
+        ts.isEmpty ||
+        !hasRawXml ||
+        (!hasBody && !hasOobUrl && !hasInvite && !hasFileTransfer)) {
       return null;
     }
     final timestamp = DateTime.tryParse(ts);
@@ -114,6 +145,12 @@ class ChatMessage {
       inviteRoomJid: inviteRoomJid,
       inviteReason: inviteReason,
       invitePassword: invitePassword,
+      fileTransferId: fileTransferId,
+      fileName: fileName,
+      fileSize: fileSize,
+      fileMime: fileMime,
+      fileBytes: fileBytes,
+      fileState: fileState,
       edited: edited,
       editedAt: editedAt,
       reactions: reactions,

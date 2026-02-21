@@ -18,6 +18,8 @@ export 'src/elements/stanzas/MessageStanza.dart';
 export 'src/elements/stanzas/PresenceStanza.dart';
 export 'src/elements/nonzas/Nonza.dart';
 export 'src/extensions/ping/PingManager.dart';
+export 'src/extensions/ibb/IbbManager.dart';
+export 'src/extensions/jingle/JingleManager.dart';
 export 'src/extensions/iq_router/IqRouter.dart';
 export 'src/extensions/vcard_temp/VCard.dart';
 export 'src/extensions/vcard_temp/VCardManager.dart';

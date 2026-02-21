@@ -28,6 +28,6 @@ Client shortfalls (must also satisfy Core Client):
 Status: IM Client appears met.
 
 Advanced Client shortfalls (must also satisfy IM Client):
-- XEP-0234 + XEP-0261 (Jingle File Transfer + Jingle IBB transport).
+- None noted.
 
-Status: IM Advanced Client is not met until the above are implemented.
+Status: IM Advanced Client appears met.

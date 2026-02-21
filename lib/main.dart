@@ -1151,6 +1151,18 @@ class _WimsyHomeState extends State<WimsyHome> {
                                   isRoom: isBookmark,
                                 )
                             : null,
+                        onAcceptFile: (!isBookmark &&
+                                !message.outgoing &&
+                                (message.fileTransferId ?? '').isNotEmpty &&
+                                message.fileState == 'offered')
+                            ? () => _promptAcceptFileTransfer(activeChat, message)
+                            : null,
+                        onDeclineFile: (!isBookmark &&
+                                !message.outgoing &&
+                                (message.fileTransferId ?? '').isNotEmpty &&
+                                message.fileState == 'offered')
+                            ? () => _declineFileTransfer(message)
+                            : null,
                       );
                     },
                   ),
@@ -1470,6 +1482,34 @@ class _WimsyHomeState extends State<WimsyHome> {
     if (error != null) {
       _showSnack(error);
     }
+  }
+
+  Future<void> _promptAcceptFileTransfer(String activeChat, ChatMessage message) async {
+    final transferId = message.fileTransferId;
+    if (transferId == null || transferId.isEmpty) {
+      return;
+    }
+    final suggested = message.fileName?.isNotEmpty == true ? message.fileName! : 'file';
+    final path = await FilePicker.platform.saveFile(
+      dialogTitle: 'Save file',
+      fileName: suggested,
+    );
+    if (path == null || path.isEmpty) {
+      await _declineFileTransfer(message);
+      return;
+    }
+    await widget.service.acceptFileTransfer(
+      transferId: transferId,
+      savePath: path,
+    );
+  }
+
+  Future<void> _declineFileTransfer(ChatMessage message) async {
+    final transferId = message.fileTransferId;
+    if (transferId == null || transferId.isEmpty) {
+      return;
+    }
+    await widget.service.declineFileTransfer(transferId: transferId);
   }
 
   Future<Uint8List?> _readPickedFileBytes(PlatformFile file) async {
@@ -2143,6 +2183,11 @@ String _messagePreviewText(XmppService service, ChatMessage message) {
     final roomName = service.displayNameFor(inviteRoomJid);
     return 'Invitation to $roomName';
   }
+  final transferId = message.fileTransferId;
+  if (transferId != null && transferId.isNotEmpty) {
+    final name = message.fileName?.trim();
+    return name == null || name.isEmpty ? 'File transfer' : 'File: $name';
+  }
   final body = message.body.trim();
   if (body.isNotEmpty) {
     return body;
@@ -2164,6 +2209,8 @@ class _MessageBubble extends StatelessWidget {
     required this.onJoinInvite,
     required this.onReact,
     required this.onEdit,
+    required this.onAcceptFile,
+    required this.onDeclineFile,
   });
 
   final ChatMessage message;
@@ -2177,6 +2224,8 @@ class _MessageBubble extends StatelessWidget {
   final VoidCallback? onJoinInvite;
   final void Function(String emoji)? onReact;
   final VoidCallback? onEdit;
+  final VoidCallback? onAcceptFile;
+  final VoidCallback? onDeclineFile;
 
   static const List<String> _reactionOptions = [
     '👍',
@@ -2197,6 +2246,7 @@ class _MessageBubble extends StatelessWidget {
         ? textColor.withValues(alpha: 0.85)
         : xep0392ColorForLabel(senderName);
     final oobImage = _buildOobImage(context);
+    final fileTransferCard = _buildFileTransferCard(context);
     final inviteCard = _buildInviteCard(context);
     final reactions = message.reactions ?? const {};
 
@@ -2253,6 +2303,10 @@ class _MessageBubble extends StatelessWidget {
                     ],
                   ),
                 const SizedBox(height: 6),
+                if (fileTransferCard != null) ...[
+                  fileTransferCard,
+                  const SizedBox(height: 8),
+                ],
                 if (inviteCard != null) ...[
                   inviteCard,
                   const SizedBox(height: 8),
@@ -2450,6 +2504,109 @@ class _MessageBubble extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  Widget? _buildFileTransferCard(BuildContext context) {
+    final transferId = message.fileTransferId;
+    if (transferId == null || transferId.isEmpty) {
+      return null;
+    }
+    final theme = Theme.of(context);
+    final name = message.fileName?.isNotEmpty == true ? message.fileName! : 'File';
+    final size = message.fileSize;
+    final bytes = message.fileBytes ?? 0;
+    final state = message.fileState ?? '';
+    final status = _fileTransferStatusLabel(state, message.outgoing);
+    final showActions = !message.outgoing &&
+        state == 'offered' &&
+        (onAcceptFile != null || onDeclineFile != null);
+    final hasProgress = size != null && size > 0 && state == 'in_progress';
+    final progressValue = hasProgress ? (bytes / size).clamp(0.0, 1.0) : null;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            name,
+            style: theme.textTheme.titleSmall,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            size == null ? 'Size unknown' : _formatFileSize(size),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            status,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          if (hasProgress) ...[
+            const SizedBox(height: 8),
+            LinearProgressIndicator(value: progressValue),
+          ],
+          if (showActions) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                FilledButton(
+                  onPressed: onAcceptFile,
+                  child: const Text('Receive'),
+                ),
+                const SizedBox(width: 8),
+                TextButton(
+                  onPressed: onDeclineFile,
+                  child: const Text('Decline'),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  String _fileTransferStatusLabel(String state, bool outgoing) {
+    switch (state) {
+      case 'accepted':
+        return 'Accepted';
+      case 'in_progress':
+        return outgoing ? 'Sending...' : 'Receiving...';
+      case 'completed':
+        return 'Completed';
+      case 'failed':
+        return 'Failed';
+      case 'declined':
+        return 'Declined';
+      case 'offered':
+      default:
+        return outgoing ? 'Waiting for acceptance' : 'Waiting to accept';
+    }
+  }
+
+  String _formatFileSize(int bytes) {
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    var size = bytes.toDouble();
+    var unitIndex = 0;
+    while (size >= 1024 && unitIndex < units.length - 1) {
+      size /= 1024;
+      unitIndex += 1;
+    }
+    final value = size >= 10 ? size.roundToDouble() : double.parse(size.toStringAsFixed(1));
+    final text = value == value.roundToDouble()
+        ? value.toStringAsFixed(0)
+        : value.toStringAsFixed(1);
+    return '$text ${units[unitIndex]}';
   }
 
   Widget? _buildOobImage(BuildContext context) {

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:http/http.dart' as http;
@@ -142,6 +143,8 @@ class XmppService extends ChangeNotifier {
   PepCapsManager? _pepCapsManager;
   BookmarksManager? _bookmarksManager;
   PrivacyListsManager? _privacyListsManager;
+  JingleManager? _jingleManager;
+  IbbManager? _ibbManager;
   String? _httpUploadServiceJid;
   bool _pepVcardConversionSupported = false;
   String _lastSelfAvatarHash = '';
@@ -156,6 +159,19 @@ class XmppService extends ChangeNotifier {
   static const _vcardNoAvatar = 'none';
   String _selfVcardPhotoHash = '';
   bool _selfVcardPhotoKnown = false;
+  final Map<String, _FileTransferSession> _fileTransfers = {};
+  StreamSubscription<JingleSessionEvent>? _jingleSubscription;
+  StreamSubscription<IbbOpen>? _ibbOpenSubscription;
+  StreamSubscription<IbbData>? _ibbDataSubscription;
+  StreamSubscription<IbbClose>? _ibbCloseSubscription;
+
+  static const int _ibbDefaultBlockSize = 4096;
+  static const String _fileTransferStateOffered = 'offered';
+  static const String _fileTransferStateAccepted = 'accepted';
+  static const String _fileTransferStateInProgress = 'in_progress';
+  static const String _fileTransferStateCompleted = 'completed';
+  static const String _fileTransferStateFailed = 'failed';
+  static const String _fileTransferStateDeclined = 'declined';
 
   XmppStatus get status => _status;
   String? get errorMessage => _errorMessage;
@@ -570,6 +586,8 @@ class XmppService extends ChangeNotifier {
           notifyListeners();
           _setupKeepalive();
           _setupDeliveryTracking();
+          _setupJingle();
+          _setupIbb();
           return;
         }
         if (state == XmppConnectionState.Ready) {
@@ -591,6 +609,8 @@ class XmppService extends ChangeNotifier {
           _setupChatManager();
           _setupMuc();
           _setupMessageSignals();
+          _setupJingle();
+          _setupIbb();
           _setupPresence();
           _setupKeepalive();
           _setupDeliveryTracking();
@@ -1241,6 +1261,14 @@ class XmppService extends ChangeNotifier {
     if (!isRoom && isBookmark(targetJid)) {
       return 'Not connected to the room.';
     }
+    if (!isRoom) {
+      return _sendJingleFile(
+        toBareJid: targetJid,
+        bytes: bytes,
+        fileName: fileName,
+        contentType: contentType,
+      );
+    }
     final uploadService = await _resolveHttpUploadServiceJid();
     if (uploadService == null) {
       return 'Server does not advertise HTTP upload.';
@@ -1308,6 +1336,159 @@ class XmppService extends ChangeNotifier {
     );
     chat.myState = ChatState.ACTIVE;
     return null;
+  }
+
+  Future<String?> _sendJingleFile({
+    required String toBareJid,
+    required Uint8List bytes,
+    required String fileName,
+    String? contentType,
+  }) async {
+    final connection = _connection;
+    final jingle = _jingleManager;
+    if (connection == null || jingle == null || _currentUserBareJid == null) {
+      return 'Not connected.';
+    }
+    final normalized = _bareJid(toBareJid);
+    if (normalized.isEmpty) {
+      return 'Invalid JID.';
+    }
+    final sid = AbstractStanza.getRandomId();
+    final ibbSid = AbstractStanza.getRandomId();
+    final offer = JingleFileTransferOffer(
+      fileName: fileName,
+      fileSize: bytes.length,
+      mediaType: contentType,
+    );
+    final content = JingleContent(
+      name: 'file',
+      creator: 'initiator',
+      fileOffer: offer,
+      ibbTransport: JingleIbbTransport(
+        sid: ibbSid,
+        blockSize: _ibbDefaultBlockSize,
+        stanza: 'iq',
+      ),
+    );
+    final iq = jingle.buildSessionInitiate(
+      to: Jid.fromFullJid(normalized),
+      sid: sid,
+      content: content,
+      ibbSid: ibbSid,
+      blockSize: _ibbDefaultBlockSize,
+    );
+    final session = _FileTransferSession.outgoing(
+      sid: sid,
+      peerBareJid: normalized,
+      ibbSid: ibbSid,
+      blockSize: _ibbDefaultBlockSize,
+      fileName: fileName,
+      fileSize: bytes.length,
+      fileMime: contentType,
+      bytes: bytes,
+    );
+    _fileTransfers[sid] = session;
+    _addFileTransferMessage(
+      bareJid: normalized,
+      session: session,
+      outgoing: true,
+      rawXml: _serializeStanza(iq),
+      state: _fileTransferStateOffered,
+    );
+    final result = await _sendIqAndAwait(iq);
+    if (result == null || result.type != IqStanzaType.RESULT) {
+      _updateFileTransferMessage(
+        bareJid: normalized,
+        transferId: sid,
+        state: _fileTransferStateFailed,
+      );
+      return 'Jingle session-initiate failed.';
+    }
+    return null;
+  }
+
+  Future<void> acceptFileTransfer({
+    required String transferId,
+    required String savePath,
+  }) async {
+    final session = _fileTransfers[transferId];
+    if (session == null || !session.incoming) {
+      return;
+    }
+    if (savePath.isEmpty) {
+      await declineFileTransfer(transferId: transferId);
+      return;
+    }
+    try {
+      session.savePath = savePath;
+      session.sink = File(savePath).openWrite();
+    } catch (_) {
+      _updateFileTransferMessage(
+        bareJid: session.peerBareJid,
+        transferId: transferId,
+        state: _fileTransferStateFailed,
+      );
+      return;
+    }
+    final jingle = _jingleManager;
+    if (jingle == null) {
+      return;
+    }
+    final content = JingleContent(
+      name: 'file',
+      creator: 'initiator',
+      fileOffer: JingleFileTransferOffer(
+        fileName: session.fileName,
+        fileSize: session.fileSize,
+        mediaType: session.fileMime,
+      ),
+      ibbTransport: JingleIbbTransport(
+        sid: session.ibbSid,
+        blockSize: session.blockSize,
+        stanza: 'iq',
+      ),
+    );
+    final iq = jingle.buildSessionAccept(
+      to: Jid.fromFullJid(session.peerBareJid),
+      sid: session.sid,
+      content: content,
+      ibbSid: session.ibbSid,
+      blockSize: session.blockSize,
+    );
+    final result = await _sendIqAndAwait(iq);
+    if (result == null || result.type != IqStanzaType.RESULT) {
+      _updateFileTransferMessage(
+        bareJid: session.peerBareJid,
+        transferId: transferId,
+        state: _fileTransferStateFailed,
+      );
+      return;
+    }
+    _updateFileTransferMessage(
+      bareJid: session.peerBareJid,
+      transferId: transferId,
+      state: _fileTransferStateAccepted,
+    );
+  }
+
+  Future<void> declineFileTransfer({
+    required String transferId,
+  }) async {
+    final session = _fileTransfers[transferId];
+    if (session == null) {
+      return;
+    }
+    _updateFileTransferMessage(
+      bareJid: session.peerBareJid,
+      transferId: transferId,
+      state: _fileTransferStateDeclined,
+    );
+    await _sendJingleTerminate(
+      Jid.fromFullJid(session.peerBareJid),
+      session.sid,
+      'decline',
+    );
+    _finalizeTransfer(session);
   }
 
   void sendReaction({
@@ -1422,6 +1603,30 @@ class XmppService extends ChangeNotifier {
     });
   }
 
+  void _setupJingle() {
+    final connection = _connection;
+    if (connection == null) {
+      return;
+    }
+    _jingleManager = JingleManager.getInstance(connection);
+    _jingleSubscription?.cancel();
+    _jingleSubscription = _jingleManager!.sessionStream.listen(_handleJingleEvent);
+  }
+
+  void _setupIbb() {
+    final connection = _connection;
+    if (connection == null) {
+      return;
+    }
+    _ibbManager = IbbManager.getInstance(connection);
+    _ibbOpenSubscription?.cancel();
+    _ibbDataSubscription?.cancel();
+    _ibbCloseSubscription?.cancel();
+    _ibbOpenSubscription = _ibbManager!.openStream.listen(_handleIbbOpen);
+    _ibbDataSubscription = _ibbManager!.dataStream.listen(_handleIbbData);
+    _ibbCloseSubscription = _ibbManager!.closeStream.listen(_handleIbbClose);
+  }
+
   void _setupDeliveryTracking() {
     final connection = _connection;
     if (connection == null) {
@@ -1525,6 +1730,130 @@ class XmppService extends ChangeNotifier {
       notifyListeners();
     });
     _startMucSelfPingTimer();
+  }
+
+  void _handleJingleEvent(JingleSessionEvent event) {
+    switch (event.action) {
+      case JingleAction.sessionInitiate:
+        _handleJingleSessionInitiate(event);
+        return;
+      case JingleAction.sessionAccept:
+        _handleJingleSessionAccept(event);
+        return;
+      case JingleAction.sessionTerminate:
+        _handleJingleSessionTerminate(event);
+        return;
+      case JingleAction.unknown:
+        return;
+    }
+  }
+
+  void _handleJingleSessionInitiate(JingleSessionEvent event) {
+    final offer = event.content?.fileOffer;
+    final transport = event.content?.ibbTransport;
+    if (offer == null || transport == null) {
+      _sendJingleTerminate(event.from, event.sid, 'unsupported-applications');
+      return;
+    }
+    final peerBare = event.from.userAtDomain;
+    if (peerBare.isEmpty) {
+      return;
+    }
+    if (_fileTransfers.containsKey(event.sid)) {
+      return;
+    }
+    final session = _FileTransferSession.incoming(
+      sid: event.sid,
+      peerBareJid: peerBare,
+      ibbSid: transport.sid,
+      blockSize: transport.blockSize,
+      fileName: offer.fileName,
+      fileSize: offer.fileSize,
+      fileMime: offer.mediaType,
+    );
+    _fileTransfers[event.sid] = session;
+    _addFileTransferMessage(
+      bareJid: peerBare,
+      session: session,
+      outgoing: false,
+      rawXml: _serializeStanza(event.stanza),
+      state: _fileTransferStateOffered,
+    );
+  }
+
+  void _handleJingleSessionAccept(JingleSessionEvent event) {
+    final session = _fileTransfers[event.sid];
+    if (session == null || session.incoming) {
+      return;
+    }
+    _updateFileTransferMessage(
+      bareJid: session.peerBareJid,
+      transferId: session.sid,
+      state: _fileTransferStateAccepted,
+    );
+    unawaited(_sendIbbData(session));
+  }
+
+  void _handleJingleSessionTerminate(JingleSessionEvent event) {
+    final session = _fileTransfers[event.sid];
+    if (session == null) {
+      return;
+    }
+    final reason = event.reason ?? '';
+    final nextState = reason == 'success'
+        ? _fileTransferStateCompleted
+        : (reason == 'decline' ? _fileTransferStateDeclined : _fileTransferStateFailed);
+    _updateFileTransferMessage(
+      bareJid: session.peerBareJid,
+      transferId: session.sid,
+      state: nextState,
+    );
+    _finalizeTransfer(session);
+  }
+
+  void _handleIbbOpen(IbbOpen open) {
+    final session = _findTransferByIbbSid(open.sid);
+    if (session == null) {
+      return;
+    }
+    session.blockSize = open.blockSize;
+    _updateFileTransferMessage(
+      bareJid: session.peerBareJid,
+      transferId: session.sid,
+      state: _fileTransferStateInProgress,
+      fileBytes: session.bytesTransferred,
+    );
+  }
+
+  void _handleIbbData(IbbData data) {
+    final session = _findTransferByIbbSid(data.sid);
+    if (session == null) {
+      return;
+    }
+    if (session.incoming && session.sink != null) {
+      session.sink!.add(data.bytes);
+    }
+    session.bytesTransferred += data.bytes.length;
+    _updateFileTransferMessage(
+      bareJid: session.peerBareJid,
+      transferId: session.sid,
+      state: _fileTransferStateInProgress,
+      fileBytes: session.bytesTransferred,
+    );
+  }
+
+  void _handleIbbClose(IbbClose close) {
+    final session = _findTransferByIbbSid(close.sid);
+    if (session == null) {
+      return;
+    }
+    _finalizeTransfer(session);
+    _updateFileTransferMessage(
+      bareJid: session.peerBareJid,
+      transferId: session.sid,
+      state: _fileTransferStateCompleted,
+      fileBytes: session.bytesTransferred,
+    );
   }
 
   void _handleMessageStanza(MessageStanza stanza) {
@@ -1962,6 +2291,12 @@ class XmppService extends ChangeNotifier {
         inviteRoomJid: existing.inviteRoomJid,
         inviteReason: existing.inviteReason,
         invitePassword: existing.invitePassword,
+        fileTransferId: existing.fileTransferId,
+        fileName: existing.fileName,
+        fileSize: existing.fileSize,
+        fileMime: existing.fileMime,
+        fileBytes: existing.fileBytes,
+        fileState: existing.fileState,
         edited: true,
         editedAt: nextEditedAt,
         reactions: existing.reactions ?? const {},
@@ -2027,6 +2362,12 @@ class XmppService extends ChangeNotifier {
         stanzaId: existing.stanzaId,
         oobUrl: existing.oobUrl,
         rawXml: existing.rawXml,
+        fileTransferId: existing.fileTransferId,
+        fileName: existing.fileName,
+        fileSize: existing.fileSize,
+        fileMime: existing.fileMime,
+        fileBytes: existing.fileBytes,
+        fileState: existing.fileState,
         edited: existing.edited,
         editedAt: existing.editedAt,
         reactions: nextReactions,
@@ -3021,6 +3362,12 @@ class XmppService extends ChangeNotifier {
             inviteRoomJid: nextInviteRoomJid,
             inviteReason: nextInviteReason,
             invitePassword: nextInvitePassword,
+            fileTransferId: existing.fileTransferId,
+            fileName: existing.fileName,
+            fileSize: existing.fileSize,
+            fileMime: existing.fileMime,
+            fileBytes: existing.fileBytes,
+            fileState: existing.fileState,
             edited: existing.edited,
             editedAt: existing.editedAt,
             reactions: existing.reactions ?? const {},
@@ -3160,6 +3507,12 @@ class XmppService extends ChangeNotifier {
             stanzaId: nextStanzaId,
             oobUrl: nextOobUrl,
             rawXml: nextRawXml,
+            fileTransferId: existing.fileTransferId,
+            fileName: existing.fileName,
+            fileSize: existing.fileSize,
+            fileMime: existing.fileMime,
+            fileBytes: existing.fileBytes,
+            fileState: existing.fileState,
             edited: existing.edited,
             editedAt: existing.editedAt,
             reactions: existing.reactions ?? const {},
@@ -3271,6 +3624,192 @@ class XmppService extends ChangeNotifier {
     }
   }
 
+  void _addFileTransferMessage({
+    required String bareJid,
+    required _FileTransferSession session,
+    required bool outgoing,
+    required String rawXml,
+    required String state,
+  }) {
+    final normalized = _bareJid(bareJid);
+    final list = _messages.putIfAbsent(normalized, () => <ChatMessage>[]);
+    final message = ChatMessage(
+      from: outgoing ? (_currentUserBareJid ?? normalized) : normalized,
+      to: outgoing ? normalized : (_currentUserBareJid ?? normalized),
+      body: '',
+      outgoing: outgoing,
+      timestamp: DateTime.now(),
+      messageId: session.sid,
+      rawXml: rawXml,
+      fileTransferId: session.sid,
+      fileName: session.fileName,
+      fileSize: session.fileSize,
+      fileMime: session.fileMime,
+      fileBytes: session.bytesTransferred,
+      fileState: state,
+      reactions: const {},
+    );
+    _insertMessageOrdered(list, message);
+    notifyListeners();
+    _messagePersistor?.call(normalized, List.unmodifiable(list));
+    if (!outgoing) {
+      _incomingMessageHandler?.call(normalized, message);
+    }
+  }
+
+  void _updateFileTransferMessage({
+    required String bareJid,
+    required String transferId,
+    String? state,
+    int? fileBytes,
+  }) {
+    final normalized = _bareJid(bareJid);
+    final list = _messages[normalized];
+    if (list == null || list.isEmpty) {
+      return;
+    }
+    for (var i = list.length - 1; i >= 0; i--) {
+      final existing = list[i];
+      if (existing.fileTransferId != transferId &&
+          existing.messageId != transferId) {
+        continue;
+      }
+      final nextState = state ?? existing.fileState;
+      final nextBytes = fileBytes ?? existing.fileBytes;
+      list[i] = ChatMessage(
+        from: existing.from,
+        to: existing.to,
+        body: existing.body,
+        outgoing: existing.outgoing,
+        timestamp: existing.timestamp,
+        messageId: existing.messageId,
+        mamId: existing.mamId,
+        stanzaId: existing.stanzaId,
+        oobUrl: existing.oobUrl,
+        rawXml: existing.rawXml,
+        inviteRoomJid: existing.inviteRoomJid,
+        inviteReason: existing.inviteReason,
+        invitePassword: existing.invitePassword,
+        fileTransferId: existing.fileTransferId,
+        fileName: existing.fileName,
+        fileSize: existing.fileSize,
+        fileMime: existing.fileMime,
+        fileBytes: nextBytes,
+        fileState: nextState,
+        edited: existing.edited,
+        editedAt: existing.editedAt,
+        reactions: existing.reactions ?? const {},
+        acked: existing.acked,
+        receiptReceived: existing.receiptReceived,
+        displayed: existing.displayed,
+      );
+      notifyListeners();
+      _messagePersistor?.call(normalized, List.unmodifiable(list));
+      return;
+    }
+  }
+
+  Future<void> _sendIbbData(_FileTransferSession session) async {
+    final ibb = _ibbManager;
+    if (ibb == null) {
+      _updateFileTransferMessage(
+        bareJid: session.peerBareJid,
+        transferId: session.sid,
+        state: _fileTransferStateFailed,
+      );
+      return;
+    }
+    final bytes = session.bytes;
+    if (bytes == null || bytes.isEmpty) {
+      return;
+    }
+    final target = Jid.fromFullJid(session.peerBareJid);
+    final opened = await ibb.sendOpen(
+      to: target,
+      sid: session.ibbSid,
+      blockSize: session.blockSize,
+    );
+    if (!opened) {
+      _updateFileTransferMessage(
+        bareJid: session.peerBareJid,
+        transferId: session.sid,
+        state: _fileTransferStateFailed,
+      );
+      await _sendJingleTerminate(target, session.sid, 'failed-application');
+      return;
+    }
+    session.bytesTransferred = 0;
+    _updateFileTransferMessage(
+      bareJid: session.peerBareJid,
+      transferId: session.sid,
+      state: _fileTransferStateInProgress,
+      fileBytes: session.bytesTransferred,
+    );
+    var seq = 0;
+    for (var offset = 0; offset < bytes.length; offset += session.blockSize) {
+      final end = (offset + session.blockSize).clamp(0, bytes.length);
+      final chunk = bytes.sublist(offset, end);
+      final sent = await ibb.sendData(
+        to: target,
+        sid: session.ibbSid,
+        seq: seq,
+        bytes: chunk,
+      );
+      if (!sent) {
+        _updateFileTransferMessage(
+          bareJid: session.peerBareJid,
+          transferId: session.sid,
+          state: _fileTransferStateFailed,
+        );
+        await _sendJingleTerminate(target, session.sid, 'failed-application');
+        return;
+      }
+      seq += 1;
+      session.bytesTransferred += chunk.length;
+      _updateFileTransferMessage(
+        bareJid: session.peerBareJid,
+        transferId: session.sid,
+        state: _fileTransferStateInProgress,
+        fileBytes: session.bytesTransferred,
+      );
+    }
+    await ibb.sendClose(to: target, sid: session.ibbSid);
+    _updateFileTransferMessage(
+      bareJid: session.peerBareJid,
+      transferId: session.sid,
+      state: _fileTransferStateCompleted,
+      fileBytes: session.bytesTransferred,
+    );
+    await _sendJingleTerminate(target, session.sid, 'success');
+    _finalizeTransfer(session);
+  }
+
+  Future<void> _sendJingleTerminate(Jid to, String sid, String reason) async {
+    final jingle = _jingleManager;
+    if (jingle == null) {
+      return;
+    }
+    final iq = jingle.buildSessionTerminate(to: to, sid: sid, reason: reason);
+    await _sendIqAndAwait(iq);
+  }
+
+  _FileTransferSession? _findTransferByIbbSid(String ibbSid) {
+    for (final session in _fileTransfers.values) {
+      if (session.ibbSid == ibbSid) {
+        return session;
+      }
+    }
+    return null;
+  }
+
+  void _finalizeTransfer(_FileTransferSession session) {
+    if (session.sink != null) {
+      session.sink!.close();
+      session.sink = null;
+    }
+    _fileTransfers.remove(session.sid);
+  }
+
   bool _updateOutgoingStatus(
     String bareJid,
     String messageId, {
@@ -3306,6 +3845,12 @@ class XmppService extends ChangeNotifier {
         stanzaId: existing.stanzaId,
         oobUrl: existing.oobUrl,
         rawXml: existing.rawXml,
+        fileTransferId: existing.fileTransferId,
+        fileName: existing.fileName,
+        fileSize: existing.fileSize,
+        fileMime: existing.fileMime,
+        fileBytes: existing.fileBytes,
+        fileState: existing.fileState,
         edited: existing.edited,
         editedAt: existing.editedAt,
         reactions: existing.reactions ?? const {},
@@ -3356,6 +3901,12 @@ class XmppService extends ChangeNotifier {
         stanzaId: existing.stanzaId,
         oobUrl: existing.oobUrl,
         rawXml: existing.rawXml,
+        fileTransferId: existing.fileTransferId,
+        fileName: existing.fileName,
+        fileSize: existing.fileSize,
+        fileMime: existing.fileMime,
+        fileBytes: existing.fileBytes,
+        fileState: existing.fileState,
         edited: existing.edited,
         editedAt: existing.editedAt,
         reactions: existing.reactions ?? const {},
@@ -3481,6 +4032,12 @@ class XmppService extends ChangeNotifier {
           stanzaId: (stanzaId != null && stanzaId.isNotEmpty) ? stanzaId : existing.stanzaId,
           oobUrl: existing.oobUrl,
           rawXml: nextRawXml,
+          fileTransferId: existing.fileTransferId,
+          fileName: existing.fileName,
+          fileSize: existing.fileSize,
+          fileMime: existing.fileMime,
+          fileBytes: existing.fileBytes,
+          fileState: existing.fileState,
           edited: existing.edited,
           editedAt: existing.editedAt,
           reactions: existing.reactions ?? const {},
@@ -3514,6 +4071,12 @@ class XmppService extends ChangeNotifier {
         stanzaId: (stanzaId != null && stanzaId.isNotEmpty) ? stanzaId : existing.stanzaId,
         oobUrl: existing.oobUrl,
         rawXml: existing.rawXml,
+        fileTransferId: existing.fileTransferId,
+        fileName: existing.fileName,
+        fileSize: existing.fileSize,
+        fileMime: existing.fileMime,
+        fileBytes: existing.fileBytes,
+        fileState: existing.fileState,
         edited: existing.edited,
         editedAt: existing.editedAt,
         reactions: existing.reactions ?? const {},
@@ -3726,6 +4289,14 @@ class XmppService extends ChangeNotifier {
     _smDeliveredSubscription = null;
     _pepSubscription?.cancel();
     _pepSubscription = null;
+    _jingleSubscription?.cancel();
+    _jingleSubscription = null;
+    _ibbOpenSubscription?.cancel();
+    _ibbOpenSubscription = null;
+    _ibbDataSubscription?.cancel();
+    _ibbDataSubscription = null;
+    _ibbCloseSubscription?.cancel();
+    _ibbCloseSubscription = null;
     _pendingPings.clear();
     for (final timer in _pingTimeoutTimers.values) {
       timer.cancel();
@@ -3804,9 +4375,15 @@ class XmppService extends ChangeNotifier {
     _pepCapsManager = null;
     _bookmarksManager = null;
     _privacyListsManager = null;
+    _jingleManager = null;
+    _ibbManager = null;
+    for (final session in _fileTransfers.values) {
+      session.sink?.close();
+    }
     _blockedJids.clear();
     _vcardAvatarBytes.clear();
     _vcardRequests.clear();
+    _fileTransfers.clear();
 
     try {
       final connection = _connection;
@@ -4580,6 +5157,77 @@ class XmppService extends ChangeNotifier {
     }
     _sendPing(shortTimeout: shortTimeout);
   }
+}
+
+class _FileTransferSession {
+  _FileTransferSession({
+    required this.sid,
+    required this.peerBareJid,
+    required this.ibbSid,
+    required this.blockSize,
+    required this.fileName,
+    required this.fileSize,
+    required this.incoming,
+    this.fileMime,
+    this.bytes,
+  });
+
+  factory _FileTransferSession.incoming({
+    required String sid,
+    required String peerBareJid,
+    required String ibbSid,
+    required int blockSize,
+    required String fileName,
+    required int fileSize,
+    String? fileMime,
+  }) {
+    return _FileTransferSession(
+      sid: sid,
+      peerBareJid: peerBareJid,
+      ibbSid: ibbSid,
+      blockSize: blockSize,
+      fileName: fileName,
+      fileSize: fileSize,
+      fileMime: fileMime,
+      incoming: true,
+    );
+  }
+
+  factory _FileTransferSession.outgoing({
+    required String sid,
+    required String peerBareJid,
+    required String ibbSid,
+    required int blockSize,
+    required String fileName,
+    required int fileSize,
+    String? fileMime,
+    required Uint8List bytes,
+  }) {
+    return _FileTransferSession(
+      sid: sid,
+      peerBareJid: peerBareJid,
+      ibbSid: ibbSid,
+      blockSize: blockSize,
+      fileName: fileName,
+      fileSize: fileSize,
+      fileMime: fileMime,
+      incoming: false,
+      bytes: bytes,
+    );
+  }
+
+  final String sid;
+  final String peerBareJid;
+  final String ibbSid;
+  int blockSize;
+  final String fileName;
+  final int fileSize;
+  final String? fileMime;
+  final bool incoming;
+  final Uint8List? bytes;
+  int bytesTransferred = 0;
+  String? savePath;
+  IOSink? sink;
 }
 
 class _ReactionUpdate {
