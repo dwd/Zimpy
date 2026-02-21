@@ -131,7 +131,6 @@ class ServiceDiscoveryNegotiator extends Negotiator {
 
   bool isDiscoInfoQuery(IqStanza stanza) {
     return stanza.type == IqStanzaType.GET &&
-        stanza.toJid!.fullJid == _connection.fullJid.fullJid &&
         stanza.children
             .where((element) =>
                 element.name == 'query' &&
