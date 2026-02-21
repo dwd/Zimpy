@@ -7,6 +7,7 @@ import 'package:xmpp_stone/src/elements/XmppAttribute.dart';
 import 'package:xmpp_stone/src/elements/XmppElement.dart';
 import 'package:xmpp_stone/src/elements/stanzas/AbstractStanza.dart';
 import 'package:xmpp_stone/src/elements/stanzas/IqStanza.dart';
+import 'package:xmpp_stone/src/extensions/iq_router/IqRouter.dart';
 import 'package:xmpp_stone/src/roster/Buddy.dart';
 
 //todo check for rfc6121 2.6.2
@@ -24,7 +25,7 @@ class RosterManager {
   }
 
   static void removeInstance(Connection connection) {
-    instances[connection]?._abstractStanzaSubscription.cancel();
+    instances[connection]?._router.unregisterNamespaceHandler('jabber:iq:roster');
     instances[connection]?._xmppConnectionStateSubscription.cancel();
     instances.remove(connection);
   }
@@ -34,7 +35,7 @@ class RosterManager {
   final StreamController<List<Buddy>> _rosterController = StreamController<List<Buddy>>.broadcast();
 
   late StreamSubscription<XmppConnectionState> _xmppConnectionStateSubscription;
-  late StreamSubscription<AbstractStanza?> _abstractStanzaSubscription;
+  late IqRouter _router;
 
   Stream<List<Buddy>> get rosterStream {
     return _rosterController.stream;
@@ -55,6 +56,7 @@ class RosterManager {
     }
     iqStanza.addChild(element);
     _myUnrespondedIqStanzas[iqStanza.id!] = Tuple2(iqStanza, null);
+    _router.registerResponseHandler(iqStanza.id!, _handleRosterResponse);
     _connection.writeStanza(iqStanza);
   }
 
@@ -98,6 +100,7 @@ class RosterManager {
       }
     }
     _myUnrespondedIqStanzas[iqStanza.id!] = Tuple2(iqStanza, completer);
+    _router.registerResponseHandler(iqStanza.id!, _handleRosterResponse);
     _connection.writeStanza(iqStanza);
     return completer.future;
   }
@@ -115,7 +118,7 @@ class RosterManager {
     itemElement.addAttribute(XmppAttribute('jid', rosterItem.jid!.userAtDomain));
     itemElement.addAttribute(XmppAttribute('subscription', 'remove'));
     _myUnrespondedIqStanzas[iqStanza.id!] = Tuple2(iqStanza, completer);
-    ;
+    _router.registerResponseHandler(iqStanza.id!, _handleRosterResponse);
     _connection.writeStanza(iqStanza);
     return completer.future;
   }
@@ -123,7 +126,8 @@ class RosterManager {
   RosterManager(Connection connection) {
     _connection = connection;
     _xmppConnectionStateSubscription = connection.connectionStateStream.listen(_connectionStateProcessor);
-    _abstractStanzaSubscription = connection.inStanzasStream.listen(_processStanza);
+    _router = IqRouter.getInstance(connection);
+    _router.registerNamespaceHandler('jabber:iq:roster', _handleRosterRequest);
   }
 
   void _connectionStateProcessor(XmppConnectionState state) {
@@ -135,27 +139,29 @@ class RosterManager {
     }
   }
 
-  void _processStanza(AbstractStanza? stanza) {
-    if (stanza is IqStanza) {
-      var unrespondedStanza = _myUnrespondedIqStanzas[stanza.id];
-      if (_myUnrespondedIqStanzas[stanza.id] != null) {
-        if (stanza.type == IqStanzaType.RESULT) {
-          if (_isFullJidRequest(unrespondedStanza!.item1)) {
-            _handleFullRosterResponse(stanza);
-          } else if (_isRosterSet(unrespondedStanza.item1)) {
-            _handleRosterSetSuccessResponse(unrespondedStanza);
-          }
-        } else if (stanza.type == IqStanzaType.SET) {
-          //it is roster push event
-          //send result
-          _applyRosterPush(stanza);
-          _sendRosterPushResult(stanza);
-        } else if (stanza.type == IqStanzaType.ERROR) {
-          //todo handle error cases
-          _handleRosterSetErrorResponse(unrespondedStanza!);
-        }
-      }
+  void _handleRosterResponse(IqStanza stanza) {
+    var unrespondedStanza = _myUnrespondedIqStanzas[stanza.id];
+    if (unrespondedStanza == null) {
+      return;
     }
+    if (stanza.type == IqStanzaType.RESULT) {
+      if (_isFullJidRequest(unrespondedStanza.item1)) {
+        _handleFullRosterResponse(stanza);
+      } else if (_isRosterSet(unrespondedStanza.item1)) {
+        _handleRosterSetSuccessResponse(unrespondedStanza);
+      }
+    } else if (stanza.type == IqStanzaType.ERROR) {
+      //todo handle error cases
+      _handleRosterSetErrorResponse(unrespondedStanza);
+    }
+  }
+
+  IqStanza? _handleRosterRequest(IqStanza stanza) {
+    if (stanza.type != IqStanzaType.SET) {
+      return null;
+    }
+    _applyRosterPush(stanza);
+    return _buildRosterPushResult(stanza);
   }
 
   bool _isFullJidRequest(IqStanza iqStanza) {
@@ -247,10 +253,13 @@ class RosterManager {
     }
   }
 
-  void _sendRosterPushResult(IqStanza stanza) {
+  IqStanza _buildRosterPushResult(IqStanza stanza) {
     var iqStanza = IqStanza(stanza.id, IqStanzaType.RESULT);
     iqStanza.fromJid = _connection.fullJid;
-    _connection.writeStanza(iqStanza);
+    if (stanza.fromJid != null) {
+      iqStanza.toJid = stanza.fromJid;
+    }
+    return iqStanza;
   }
 
   void _handleRosterSetSuccessResponse(Tuple2<IqStanza, Completer?> request) {

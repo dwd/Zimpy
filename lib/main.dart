@@ -42,10 +42,16 @@ Future<void> _startApp({required bool sentryEnabled}) async {
         options.dsn = 'https://7d58998fe2d0e488aa5f11020778c9f6@sentry.cridland.io/8';
         options.tracesSampleRate = 1.0;
       },
-      appRunner: () => runApp(SentryWidget(child: const WimsyApp())),
+      appRunner: () {
+        Connection.errorReporter = (error, stackTrace) {
+          Sentry.captureException(error, stackTrace: stackTrace);
+        };
+        runApp(SentryWidget(child: const WimsyApp()));
+      },
     );
     return;
   }
+  Connection.errorReporter = null;
   runApp(const WimsyApp());
 }
 

@@ -13,6 +13,7 @@ import 'package:xmpp_stone/src/features/servicediscovery/MAMNegotiator.dart';
 import 'package:xmpp_stone/src/features/servicediscovery/ServiceDiscoveryNegotiator.dart';
 import 'package:xmpp_stone/src/features/streammanagement/StreamManagmentModule.dart';
 import 'package:xmpp_stone/src/parser/StanzaParser.dart';
+import 'package:xmpp_stone/src/extensions/iq_router/IqRouter.dart';
 import 'package:xmpp_stone/xmpp_stone.dart';
 
 import 'connection/XmppWebsocketApi.dart'
@@ -47,6 +48,11 @@ class Connection {
   static String TAG = 'Connection';
 
   static Map<String, Connection> instances = {};
+  static void Function(Object error, StackTrace stackTrace)? errorReporter;
+
+  static void reportError(Object error, StackTrace stackTrace) {
+    errorReporter?.call(error, stackTrace);
+  }
 
   XmppAccountSettings account;
 
@@ -139,6 +145,7 @@ class Connection {
     PresenceManager.getInstance(this);
     MessageHandler.getInstance(this);
     PingManager.getInstance(this);
+    IqRouter.getInstance(this);
     connectionNegotatiorManager = ConnectionNegotiatorManager(this, account);
     reconnectionManager = ReconnectionManager(this);
   }
@@ -272,6 +279,7 @@ class Connection {
     PresenceManager.removeInstance(this);
     MessageHandler.removeInstance(this);
     PingManager.removeInstance(this);
+    IqRouter.removeInstance(this);
     ServiceDiscoveryNegotiator.removeInstance(this);
     StreamManagementModule.removeInstance(this);
     CarbonsNegotiator.removeInstance(this);

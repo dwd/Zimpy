@@ -7,6 +7,7 @@ import 'package:xmpp_stone/src/elements/XmppElement.dart';
 import 'package:xmpp_stone/src/elements/nonzas/Nonza.dart';
 import 'package:xmpp_stone/src/elements/stanzas/AbstractStanza.dart';
 import 'package:xmpp_stone/src/elements/stanzas/IqStanza.dart';
+import 'package:xmpp_stone/src/extensions/iq_router/IqRouter.dart';
 import 'package:xmpp_stone/src/features/Negotiator.dart';
 import 'package:xmpp_stone/src/features/servicediscovery/Feature.dart';
 import 'package:xmpp_stone/src/features/servicediscovery/Identity.dart';
@@ -28,20 +29,21 @@ class ServiceDiscoveryNegotiator extends Negotiator {
   }
 
   static void removeInstance(Connection connection) {
-    _instances[connection]?.subscription?.cancel();
+    _instances[connection]?._router.unregisterNamespaceHandler(NAMESPACE_DISCO_INFO);
     _instances.remove(connection);
   }
 
   IqStanza? fullRequestStanza;
 
-  StreamSubscription<AbstractStanza?>? subscription;
-
   final Connection _connection;
+  late final IqRouter _router;
 
   ServiceDiscoveryNegotiator(this._connection) {
     _connection.connectionStateStream.listen((state) {
       expectedName = 'ServiceDiscoveryNegotiator';
     });
+    _router = IqRouter.getInstance(_connection);
+    _router.registerNamespaceHandler(NAMESPACE_DISCO_INFO, _handleDiscoInfoRequest);
   }
 
   final StreamController<XmppElement> _errorStreamController =
@@ -55,18 +57,6 @@ class ServiceDiscoveryNegotiator extends Negotiator {
     return _errorStreamController.stream;
   }
 
-  void _parseStanza(AbstractStanza? stanza) {
-    if (stanza is IqStanza) {
-      var idValue = stanza.getAttribute('id')?.value;
-      if (idValue != null &&
-          idValue == fullRequestStanza?.getAttribute('id')?.value) {
-        _parseFullInfoResponse(stanza);
-      } else if (isDiscoInfoQuery(stanza)) {
-        sendDiscoInfoResponse(stanza);
-      }
-    }
-  }
-
   @override
   List<Nonza> match(List<Nonza> requests) {
     return [];
@@ -76,7 +66,6 @@ class ServiceDiscoveryNegotiator extends Negotiator {
   void negotiate(List<Nonza> nonza) {
     if (state == NegotiatorState.IDLE) {
       state = NegotiatorState.NEGOTIATING;
-      subscription = _connection.inStanzasStream.listen(_parseStanza);
       _sendServiceDiscoveryRequest();
     } else if (state == NegotiatorState.DONE) {}
   }
@@ -91,7 +80,14 @@ class ServiceDiscoveryNegotiator extends Negotiator {
         XmppAttribute('xmlns', 'http://jabber.org/protocol/disco#info'));
     request.addChild(queryElement);
     fullRequestStanza = request;
+    if (request.id != null) {
+      _router.registerResponseHandler(request.id!, _handleDiscoInfoResponse);
+    }
     _connection.writeStanza(request);
+  }
+
+  void _handleDiscoInfoResponse(IqStanza stanza) {
+    _parseFullInfoResponse(stanza);
   }
 
   void _parseFullInfoResponse(IqStanza stanza) {
@@ -114,7 +110,6 @@ class ServiceDiscoveryNegotiator extends Negotiator {
         _errorStreamController.add(errorStanza);
       }
     }
-    subscription?.cancel();
     _connection.connectionNegotatiorManager.addFeatures(_supportedFeatures);
     state = NegotiatorState.DONE;
   }
@@ -129,16 +124,10 @@ class ServiceDiscoveryNegotiator extends Negotiator {
     return _supportedFeatures;
   }
 
-  bool isDiscoInfoQuery(IqStanza stanza) {
-    return stanza.type == IqStanzaType.GET &&
-        stanza.children
-            .where((element) =>
-                element.name == 'query' &&
-                element.getAttribute('xmlns')?.value == NAMESPACE_DISCO_INFO)
-            .isNotEmpty;
-  }
-
-  void sendDiscoInfoResponse(IqStanza request) {
+  IqStanza? _handleDiscoInfoRequest(IqStanza request) {
+    if (request.type != IqStanzaType.GET) {
+      return null;
+    }
     var iqStanza = IqStanza(request.id, IqStanzaType.RESULT);
     //iqStanza.fromJid = _connection.fullJid; //do not send for now
     iqStanza.toJid = request.fromJid;
@@ -169,7 +158,7 @@ class ServiceDiscoveryNegotiator extends Negotiator {
       query.addChild(featureElement);
     });
     iqStanza.addChild(query);
-    _connection.writeStanza(iqStanza);
+    return iqStanza;
   }
 }
 

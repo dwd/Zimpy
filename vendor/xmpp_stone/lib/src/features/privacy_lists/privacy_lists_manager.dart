@@ -14,6 +14,7 @@ import '../../elements/privacy_lists/list_element.dart';
 import '../../elements/privacy_lists/privacy_list_item_element.dart';
 import '../../elements/stanzas/AbstractStanza.dart';
 import '../../elements/stanzas/IqStanza.dart';
+import '../../extensions/iq_router/IqRouter.dart';
 import '../../features/servicediscovery/ServiceDiscoveryNegotiator.dart';
 
 const feature_not_supported_error =
@@ -21,6 +22,7 @@ const feature_not_supported_error =
 
 class PrivacyListsManager {
   final Connection _connection;
+  final IqRouter _router;
   final Map<String, Tuple2<Function(IqStanza), Completer?>>
       _unrespondedStanzas = {};
 
@@ -31,8 +33,8 @@ class PrivacyListsManager {
 
   static final Map<Connection, PrivacyListsManager> _instances = {};
 
-  PrivacyListsManager(this._connection) {
-    _connection.inStanzasStream.listen(_processStanza);
+  PrivacyListsManager(this._connection) : _router = IqRouter.getInstance(_connection) {
+    _router.registerNamespaceHandler('jabber:iq:privacy', _handlePrivacyRequest);
   }
 
   static PrivacyListsManager getInstance(Connection connection) {
@@ -44,45 +46,41 @@ class PrivacyListsManager {
     return manager;
   }
 
-  void _processStanza(AbstractStanza? stanza) {
-    if (stanza == null) return;
+  void _handleResponse(IqStanza stanza) {
+    final unrespondedStanza = _unrespondedStanzas[stanza.id];
+    if (unrespondedStanza == null) {
+      return;
+    }
+    if (stanza.type == IqStanzaType.ERROR) {
+      var errorElement = stanza.getChild('error');
+      var errorType = errorElement?.attributes
+          .firstWhere((xmppAttribute) => xmppAttribute.name == 'type')
+          .value;
+      var errorDescription = errorElement?.children.first.name;
+      unrespondedStanza.item2
+          ?.completeError(Exception('$errorType: $errorDescription'));
+    } else {
+      unrespondedStanza.item2?.complete(unrespondedStanza.item1.call(stanza));
+    }
+    _unrespondedStanzas.remove(stanza.id);
+  }
 
-    if (stanza is IqStanza) {
-      var unrespondedStanza = _unrespondedStanzas[stanza.id];
-      if (unrespondedStanza != null) {
-        if (stanza.type == IqStanzaType.ERROR) {
-          var errorElement = stanza.getChild('error');
-          var errorType = errorElement?.attributes
-              .firstWhere((xmppAttribute) => xmppAttribute.name == 'type')
-              .value;
-          var errorDescription = errorElement?.children.first.name;
-          unrespondedStanza.item2
-              ?.completeError(Exception('$errorType: $errorDescription'));
-        } else {
-          unrespondedStanza.item2
-              ?.complete(unrespondedStanza.item1.call(stanza));
-        }
-
-        _unrespondedStanzas.remove(stanza.id);
-      } else {
-        //TODO unchecked part cause test server doesn't support this part, check and fix if need on alive server
-        if (stanza.type == IqStanzaType.SET && stanza.id != null) {
-          if (stanza.getChild('query') != null) {
-            var queryElement = stanza.getChild('query');
-            var listElement = queryElement?.getChild('list');
-            if ('jabber:iq:privacy' ==
-                    queryElement?.getAttribute('xmlns')?.value &&
-                listElement != null) {
-              var listName = listElement.getAttribute('name')?.value;
-              if (listName != null && listName.isNotEmpty) {
-                _onPrivacyListChanged(listName);
-                _sendResultToServer(stanza.id!);
-              }
-            }
-          }
-        }
+  IqStanza? _handlePrivacyRequest(IqStanza stanza) {
+    //TODO unchecked part cause test server doesn't support this part, check and fix if need on alive server
+    if (stanza.type != IqStanzaType.SET || stanza.id == null) {
+      return null;
+    }
+    final queryElement = stanza.getChild('query');
+    final listElement = queryElement?.getChild('list');
+    if ('jabber:iq:privacy' == queryElement?.getAttribute('xmlns')?.value &&
+        listElement != null) {
+      var listName = listElement.getAttribute('name')?.value;
+      if (listName != null && listName.isNotEmpty) {
+        _onPrivacyListChanged(listName);
+        return _buildResult(stanza.id!);
       }
     }
+    return null;
   }
 
   bool isPrivacyListsSupported() {
@@ -122,6 +120,9 @@ class PrivacyListsManager {
       return result;
     }, completer);
 
+    _router.registerResponseHandler(iqStanza.id!, _handleResponse);
+    _router.registerResponseHandler(iqStanza.id!, _handleResponse);
+    _router.registerResponseHandler(iqStanza.id!, _handleResponse);
     _connection.writeStanza(iqStanza);
 
     return completer.future;
@@ -153,6 +154,7 @@ class PrivacyListsManager {
       return result;
     }, completer);
 
+    _router.registerResponseHandler(iqStanza.id!, _handleResponse);
     _connection.writeStanza(iqStanza);
 
     return completer.future;
@@ -177,6 +179,7 @@ class PrivacyListsManager {
       return;
     }, completer);
 
+    _router.registerResponseHandler(iqStanza.id!, _handleResponse);
     _connection.writeStanza(iqStanza);
 
     return completer.future;
@@ -201,6 +204,7 @@ class PrivacyListsManager {
       return;
     }, completer);
 
+    _router.registerResponseHandler(iqStanza.id!, _handleResponse);
     _connection.writeStanza(iqStanza);
 
     return completer.future;
@@ -225,6 +229,7 @@ class PrivacyListsManager {
       return;
     }, completer);
 
+    _router.registerResponseHandler(iqStanza.id!, _handleResponse);
     _connection.writeStanza(iqStanza);
 
     return completer.future;
@@ -249,6 +254,7 @@ class PrivacyListsManager {
       return;
     }, completer);
 
+    _router.registerResponseHandler(iqStanza.id!, _handleResponse);
     _connection.writeStanza(iqStanza);
 
     return completer.future;
@@ -281,6 +287,7 @@ class PrivacyListsManager {
       return;
     }, completer);
 
+    _router.registerResponseHandler(iqStanza.id!, _handleResponse);
     _connection.writeStanza(iqStanza);
 
     return completer.future;
@@ -306,6 +313,7 @@ class PrivacyListsManager {
       return;
     }, completer);
 
+    _router.registerResponseHandler(iqStanza.id!, _handleResponse);
     _connection.writeStanza(iqStanza);
 
     return completer.future;
@@ -315,10 +323,7 @@ class PrivacyListsManager {
     _listsUpdatesController.add(listName);
   }
 
-  void _sendResultToServer(String id) {
-    var resultStanza = IqStanza(id, IqStanzaType.RESULT)
-      ..fromJid = _connection.fullJid;
-
-    _connection.writeStanza(resultStanza);
+  IqStanza _buildResult(String id) {
+    return IqStanza(id, IqStanzaType.RESULT)..fromJid = _connection.fullJid;
   }
 }
