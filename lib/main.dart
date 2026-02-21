@@ -1097,9 +1097,6 @@ class _WimsyHomeState extends State<WimsyHome> {
                         timestamp: timestamp,
                         avatarBytes: avatarBytes,
                         onReact: (emoji) {
-                          if (activeChat == null) {
-                            return;
-                          }
                           service.sendReaction(
                             bareJid: activeChat,
                             message: message,
@@ -1844,40 +1841,42 @@ class _MessageBubble extends StatelessWidget {
     return GestureDetector(
       onLongPress: onReact == null ? null : () => _showReactionSheet(context),
       child: Container(
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _AvatarPlaceholder(label: senderName, bytes: avatarBytes),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        senderName,
-                        style: theme.textTheme.labelMedium?.copyWith(color: nameColor),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          timestamp,
-                          style: theme.textTheme.labelSmall?.copyWith(color: textColor.withValues(alpha: 0.7)),
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _AvatarPlaceholder(label: senderName, bytes: avatarBytes),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          senderName,
+                          style: theme.textTheme.labelMedium?.copyWith(color: nameColor),
                         ),
-                        if (tickIcon != null) ...[
+                      ),
+                      const SizedBox(width: 8),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            timestamp,
+                            style: theme.textTheme.labelSmall?.copyWith(color: textColor.withValues(alpha: 0.7)),
+                          ),
+                          if (tickIcon != null) ...[
+                            const SizedBox(width: 6),
+                            tickIcon,
+                          ],
                           const SizedBox(width: 6),
-                          tickIcon,
+                          _MessageMenuButton(message: message),
                         ],
-                      ],
-                    ),
-                  ],
-                ),
+                      ),
+                    ],
+                  ),
                 const SizedBox(height: 6),
                 if (oobImage != null) ...[
                   oobImage,
@@ -2103,7 +2102,7 @@ class _MessageBubble extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceVariant,
+              color: theme.colorScheme.surfaceContainerHighest,
               borderRadius: BorderRadius.circular(12),
             ),
             child: Text(
@@ -2221,6 +2220,59 @@ class _AvatarPlaceholder extends StatelessWidget {
       backgroundColor: baseColor,
       foregroundColor: onBase,
       child: Text(initial),
+    );
+  }
+}
+
+class _MessageMenuButton extends StatelessWidget {
+  const _MessageMenuButton({required this.message});
+
+  final ChatMessage message;
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<String>(
+      padding: EdgeInsets.zero,
+      icon: const Icon(Icons.more_horiz, size: 16),
+      onSelected: (value) {
+        switch (value) {
+          case 'view_xml':
+            _showXml(context);
+            break;
+        }
+      },
+      itemBuilder: (context) => const [
+        PopupMenuItem(
+          value: 'view_xml',
+          child: Text('View XML'),
+        ),
+      ],
+    );
+  }
+
+  void _showXml(BuildContext context) {
+    final xml = message.rawXml?.trim();
+    showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Message XML'),
+          content: SizedBox(
+            width: 500,
+            child: SingleChildScrollView(
+              child: SelectableText(
+                (xml == null || xml.isEmpty) ? 'No XML cached for this message.' : xml,
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
     );
   }
 }
