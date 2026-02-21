@@ -48,6 +48,10 @@ class PepManager {
     return _metadataByJid.containsKey(bareJid);
   }
 
+  String? avatarHashFor(String bareJid) {
+    return _metadataByJid[bareJid]?.hash;
+  }
+
   void subscribeToAvatarMetadata(String bareJid) {
     _sendSubscribe(bareJid);
   }

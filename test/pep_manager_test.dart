@@ -133,4 +133,21 @@ void main() {
     expect(bytes, isNotNull);
     expect(bytes, [1, 2, 3, 4]);
   });
+
+  test('PEP exposes avatar hash for known metadata', () {
+    final storage = FakeStorageService();
+    final account = XmppAccountSettings('test', 'user', 'example.com', 'pass', 5222);
+    final connection = TestConnection(account);
+    final pep = PepManager(
+      connection: connection,
+      storage: storage,
+      selfBareJid: 'user@example.com',
+      onUpdate: () {},
+    );
+
+    final event = _buildMetadataEvent(fromJid: 'alice@example.com', hash: 'hash123');
+    pep.handleStanza(event);
+
+    expect(pep.avatarHashFor('alice@example.com'), 'hash123');
+  });
 }

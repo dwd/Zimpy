@@ -132,6 +132,8 @@ class XmppService extends ChangeNotifier {
   BookmarksManager? _bookmarksManager;
   PrivacyListsManager? _privacyListsManager;
   String? _httpUploadServiceJid;
+  bool _pepVcardConversionSupported = false;
+  String _lastSelfAvatarHash = '';
   final Set<String> _blockedJids = {};
   static const String _blockListName = 'wimsy-blocked';
   MucManager? _mucManager;
@@ -564,6 +566,9 @@ class XmppService extends ChangeNotifier {
           _status = XmppStatus.connected;
           _errorMessage = null;
           notifyListeners();
+          _pepVcardConversionSupported = connection.getSupportedFeatures().any(
+            (feature) => feature.xmppVar == 'urn:xmpp:pep-vcard-conversion:0',
+          );
           _setupRoster();
           _setupChatManager();
           _setupMuc();
@@ -964,6 +969,7 @@ class XmppService extends ChangeNotifier {
     _rooms[normalized] = existing.copyWith(joined: true, nick: resolvedNick);
     notifyListeners();
     _requestRoomMam(normalized, before: '');
+    _sendDirectedPresenceToRoom(normalized, resolvedNick);
   }
 
   void leaveRoom(String roomJid) {
@@ -1982,7 +1988,10 @@ class XmppService extends ChangeNotifier {
       connection: connection,
       storage: storage,
       selfBareJid: _currentUserBareJid!,
-      onUpdate: notifyListeners,
+      onUpdate: () {
+        _handlePepAvatarUpdate();
+        notifyListeners();
+      },
     );
     _pepCapsManager = PepCapsManager(
       connection: connection,
@@ -2043,6 +2052,21 @@ class XmppService extends ChangeNotifier {
     pubsub.addChild(items);
     iqStanza.addChild(pubsub);
     connection.writeStanza(iqStanza);
+  }
+
+  void _handlePepAvatarUpdate() {
+    final selfBareJid = _currentUserBareJid;
+    if (selfBareJid == null) {
+      return;
+    }
+    final hash = _pepManager?.avatarHashFor(selfBareJid) ?? '';
+    if (hash == _lastSelfAvatarHash) {
+      return;
+    }
+    _lastSelfAvatarHash = hash;
+    if (_pepVcardConversionSupported) {
+      _sendDirectedPresenceToJoinedRooms();
+    }
   }
 
   void _handleDisplayedSyncStanza(AbstractStanza stanza) {
@@ -3266,7 +3290,9 @@ class XmppService extends ChangeNotifier {
     stanza.show = presence.showElement;
     stanza.status = presence.status;
     stanza.addChild(_buildCapsElement());
+    stanza.addChild(_buildVcardUpdateElement());
     connection.writeStanza(stanza);
+    _sendDirectedPresenceToJoinedRooms();
   }
 
   XmppElement _buildCapsElement() {
@@ -3276,6 +3302,38 @@ class XmppService extends ChangeNotifier {
     caps.addAttribute(XmppAttribute('node', _capsNode));
     caps.addAttribute(XmppAttribute('ver', _capsVerValue()));
     return caps;
+  }
+
+  XmppElement _buildVcardUpdateElement() {
+    final update = XmppElement()..name = 'x';
+    update.addAttribute(XmppAttribute('xmlns', 'vcard-temp:x:update'));
+    return update;
+  }
+
+  void _sendDirectedPresenceToJoinedRooms() {
+    final selfBareJid = _currentUserBareJid;
+    if (selfBareJid == null) {
+      return;
+    }
+    for (final entry in _rooms.values) {
+      if (entry.joined && entry.nick != null && entry.nick!.isNotEmpty) {
+        _sendDirectedPresenceToRoom(entry.roomJid, entry.nick!);
+      }
+    }
+  }
+
+  void _sendDirectedPresenceToRoom(String roomJid, String nick) {
+    final connection = _connection;
+    if (connection == null) {
+      return;
+    }
+    final stanza = PresenceStanza();
+    stanza.toJid = Jid.fromFullJid('${_bareJid(roomJid)}/$nick');
+    stanza.show = _selfPresence.showElement;
+    stanza.status = _selfPresence.status;
+    stanza.addChild(_buildCapsElement());
+    stanza.addChild(_buildVcardUpdateElement());
+    connection.writeStanza(stanza);
   }
 
   String _capsVerValue() {
