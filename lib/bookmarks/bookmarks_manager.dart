@@ -20,6 +20,7 @@ class BookmarksManager {
   final BookmarkUpdateCallback _onUpdate;
 
   final Map<String, ContactEntry> _bookmarksByJid = {};
+  final Map<String, XmppElement> _bookmarkExtensionsByJid = {};
   String? _bookmarks2RequestId;
   String? _legacyRequestId;
 
@@ -77,6 +78,7 @@ class BookmarksManager {
 
   void clearCache() {
     _bookmarksByJid.clear();
+    _bookmarkExtensionsByJid.clear();
     _onUpdate(bookmarks);
   }
 
@@ -92,6 +94,7 @@ class BookmarksManager {
     if (_bookmarksByJid.remove(roomJid) != null) {
       _onUpdate(bookmarks);
     }
+    _bookmarkExtensionsByJid.remove(roomJid);
     await _retractBookmark(roomJid);
     await _storeLegacyBookmarks();
   }
@@ -226,12 +229,14 @@ class BookmarksManager {
               child.getAttribute('xmlns')?.value == _bookmarksNode)) {
         final bookmark = _conferenceToBookmark(child);
         if (bookmark != null) {
+          _captureExtensions(bookmark.jid, child);
           result.add(bookmark);
         }
       } else if (child.name == 'storage' && child.getAttribute('xmlns')?.value == _bookmarksNode) {
         for (final conference in child.children.where((element) => element.name == 'conference')) {
           final bookmark = _conferenceToBookmark(conference);
           if (bookmark != null) {
+            _captureExtensions(bookmark.jid, conference);
             result.add(bookmark);
           }
         }
@@ -303,6 +308,7 @@ class BookmarksManager {
     item.addChild(_buildConference(bookmark));
     publish.addChild(item);
     pubsub.addChild(publish);
+    pubsub.addChild(_buildPublishOptions());
     iqStanza.addChild(pubsub);
     connection.writeStanza(iqStanza);
   }
@@ -315,6 +321,7 @@ class BookmarksManager {
     pubsub.addAttribute(XmppAttribute('xmlns', _pubsubNs));
     final retract = XmppElement()..name = 'retract';
     retract.addAttribute(XmppAttribute('node', _bookmarksNode));
+    retract.addAttribute(XmppAttribute('notify', 'true'));
     final item = XmppElement()..name = 'item';
     item.addAttribute(XmppAttribute('id', roomJid));
     retract.addChild(item);
@@ -361,6 +368,61 @@ class BookmarksManager {
       password.textValue = bookmark.bookmarkPassword!.trim();
       conference.addChild(password);
     }
+    final extensions = _bookmarkExtensionsByJid[bookmark.jid];
+    if (extensions != null && extensions.children.isNotEmpty) {
+      conference.addChild(_cloneElement(extensions));
+    }
     return conference;
+  }
+
+  void _captureExtensions(String jid, XmppElement conference) {
+    final extensions = conference.getChild('extensions');
+    if (extensions == null || extensions.children.isEmpty) {
+      _bookmarkExtensionsByJid.remove(jid);
+      return;
+    }
+    final cloned = _cloneElement(extensions);
+    _bookmarkExtensionsByJid[jid] = cloned;
+  }
+
+  XmppElement _buildPublishOptions() {
+    final publishOptions = XmppElement()..name = 'publish-options';
+    final x = XmppElement()..name = 'x';
+    x.addAttribute(XmppAttribute('xmlns', 'jabber:x:data'));
+    x.addAttribute(XmppAttribute('type', 'submit'));
+    x.addChild(_buildDataField('FORM_TYPE',
+        'http://jabber.org/protocol/pubsub#publish-options',
+        type: 'hidden'));
+    x.addChild(_buildDataField('pubsub#persist_items', 'true'));
+    x.addChild(_buildDataField('pubsub#access_model', 'whitelist'));
+    x.addChild(_buildDataField('pubsub#send_last_published_item', 'never'));
+    x.addChild(_buildDataField('pubsub#max_items', 'max'));
+    publishOptions.addChild(x);
+    return publishOptions;
+  }
+
+  XmppElement _buildDataField(String varName, String value, {String? type}) {
+    final field = XmppElement()..name = 'field';
+    field.addAttribute(XmppAttribute('var', varName));
+    if (type != null && type.isNotEmpty) {
+      field.addAttribute(XmppAttribute('type', type));
+    }
+    final valueElement = XmppElement()..name = 'value';
+    valueElement.textValue = value;
+    field.addChild(valueElement);
+    return field;
+  }
+
+  XmppElement _cloneElement(XmppElement element) {
+    final clone = XmppElement()
+      ..name = element.name
+      ..textValue = element.textValue;
+    for (final attr in element.attributes) {
+      clone.addAttribute(XmppAttribute(attr.name, attr.value));
+    }
+    for (final child in element.children) {
+      clone.addChild(_cloneElement(child));
+    }
+    return clone;
   }
 }

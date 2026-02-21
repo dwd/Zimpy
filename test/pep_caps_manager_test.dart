@@ -31,11 +31,11 @@ class FakePepManager extends PepManager {
     required super.onUpdate,
   });
 
-  final List<String> subscribed = [];
+  final List<String> requested = [];
 
   @override
-  void subscribeToAvatarMetadata(String bareJid) {
-    subscribed.add(bareJid);
+  void requestMetadataIfMissing(String bareJid) {
+    requested.add(bareJid);
   }
 }
 
@@ -103,6 +103,6 @@ void main() {
     );
     caps.handleStanza(result);
 
-    expect(pep.subscribed, isEmpty);
+    expect(pep.requested, isEmpty);
   });
 }

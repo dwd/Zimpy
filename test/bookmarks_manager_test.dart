@@ -39,6 +39,14 @@ XmppElement _conferencePayload({required String jid, String? name, bool autoJoin
   return conference;
 }
 
+XmppElement _extensionsPayload() {
+  final extensions = XmppElement()..name = 'extensions';
+  final note = XmppElement()..name = 'note';
+  note.textValue = 'Pinned';
+  extensions.addChild(note);
+  return extensions;
+}
+
 void main() {
   test('Request bookmarks sends pubsub items query', () {
     final account = XmppAccountSettings('test', 'user', 'example.com', 'pass', 5222);
@@ -119,5 +127,67 @@ void main() {
     expect(updates, hasLength(1));
     expect(updates.first.jid, 'lounge@conference.example');
     expect(updates.first.bookmarkNick, 'wimsy');
+  });
+
+  test('Publish includes publish-options and preserves extensions', () async {
+    final account = XmppAccountSettings('test', 'user', 'example.com', 'pass', 5222);
+    final connection = TestConnection(account);
+    final manager = BookmarksManager(
+      connection: connection,
+      selfBareJid: 'user@example.com',
+      onUpdate: (_) {},
+    );
+
+    final message = MessageStanza('m1', MessageStanzaType.CHAT);
+    final event = XmppElement()..name = 'event';
+    event.addAttribute(XmppAttribute('xmlns', 'http://jabber.org/protocol/pubsub#event'));
+    final items = XmppElement()..name = 'items';
+    items.addAttribute(XmppAttribute('node', 'urn:xmpp:bookmarks:1'));
+    final item = XmppElement()..name = 'item';
+    final conference = _conferencePayload(jid: 'team@conference.example', name: 'Team');
+    conference.addChild(_extensionsPayload());
+    item.addChild(conference);
+    items.addChild(item);
+    event.addChild(items);
+    message.addChild(event);
+
+    manager.handleStanza(message);
+
+    await manager.upsertBookmark(ContactEntry(jid: 'team@conference.example', name: 'Team'));
+
+    final publishIq = connection.written.whereType<IqStanza>().firstWhere((iq) {
+      final pubsub = iq.getChild('pubsub');
+      return pubsub?.getChild('publish') != null;
+    });
+    final pubsub = publishIq.getChild('pubsub');
+    final publish = pubsub?.getChild('publish');
+    final publishOptions = pubsub?.getChild('publish-options');
+    expect(publishOptions, isNotNull);
+    final x = publishOptions!.getChild('x');
+    expect(x?.getAttribute('type')?.value, 'submit');
+    final itemElement = publish?.getChild('item');
+    final payload = itemElement?.getChild('conference');
+    final extensions = payload?.getChild('extensions');
+    expect(extensions, isNotNull);
+    expect(extensions?.getChild('note')?.textValue, 'Pinned');
+  });
+
+  test('Retract includes notify=true', () async {
+    final account = XmppAccountSettings('test', 'user', 'example.com', 'pass', 5222);
+    final connection = TestConnection(account);
+    final manager = BookmarksManager(
+      connection: connection,
+      selfBareJid: 'user@example.com',
+      onUpdate: (_) {},
+    );
+
+    await manager.removeBookmark('room@conference.example');
+
+    final retractIq = connection.written.whereType<IqStanza>().firstWhere((iq) {
+      final pubsub = iq.getChild('pubsub');
+      return pubsub?.getChild('retract') != null;
+    });
+    final retract = retractIq.getChild('pubsub')?.getChild('retract');
+    expect(retract?.getAttribute('notify')?.value, 'true');
   });
 }

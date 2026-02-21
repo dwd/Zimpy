@@ -48,7 +48,7 @@ class PepCapsManager {
     final features = _capsFeatures[capsKey];
     if (features != null) {
       if (!_supportsPepNotify(features)) {
-        pepManager.subscribeToAvatarMetadata(bareJid);
+        pepManager.requestMetadataIfMissing(bareJid);
       }
       return;
     }
@@ -93,7 +93,7 @@ class PepCapsManager {
     }
     _capsFeatures[pending.capsKey] = features;
     if (!_supportsPepNotify(features)) {
-      pepManager.subscribeToAvatarMetadata(pending.bareJid);
+      pepManager.requestMetadataIfMissing(pending.bareJid);
     }
   }
 
