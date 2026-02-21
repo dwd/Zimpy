@@ -68,6 +68,26 @@ void main() {
       expect(parsed!.message, isNotNull);
       expect(parsed.message!.stanzaId, 'stanza-55');
     });
+
+    test('Reaction-only message parses target and reactions', () {
+      final stanza = MessageStanza('root', MessageStanzaType.GROUPCHAT);
+      stanza.fromJid = Jid.fromFullJid('room@example.com/alice');
+      final reactions = XmppElement()
+        ..name = 'reactions'
+        ..addAttribute(XmppAttribute('xmlns', 'urn:xmpp:reactions:0'))
+        ..addAttribute(XmppAttribute('id', 'msg-99'));
+      reactions.addChild(XmppElement()
+        ..name = 'reaction'
+        ..textValue = '👍');
+      stanza.addChild(reactions);
+
+      final parsed = parseMucGroupMessage(stanza);
+
+      expect(parsed, isNotNull);
+      expect(parsed!.message, isNotNull);
+      expect(parsed.message!.reactionTargetId, 'msg-99');
+      expect(parsed.message!.reactions, ['👍']);
+    });
   });
 }
 
