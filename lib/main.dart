@@ -3121,6 +3121,7 @@ class _PresenceMenu extends StatelessWidget {
     if (selfJid == null || selfJid.isEmpty) {
       return;
     }
+    final supportsCamera = !kIsWeb && (Platform.isAndroid || Platform.isIOS || Platform.isMacOS);
     final nameController = TextEditingController(text: service.displayNameFor(selfJid));
     Uint8List? avatarBytes = service.avatarBytesFor(selfJid);
     String? avatarMimeType;
@@ -3181,22 +3182,39 @@ class _PresenceMenu extends StatelessWidget {
                       OutlinedButton.icon(
                         onPressed: saving
                             ? null
-                            : () async {
-                                final picker = ImagePicker();
-                                final picked = await picker.pickImage(source: ImageSource.camera);
-                                if (picked == null) {
-                                  return;
-                                }
-                                final bytes = await picked.readAsBytes();
-                                if (bytes.isEmpty) {
-                                  return;
-                                }
-                                setState(() {
-                                  avatarBytes = bytes;
-                                  avatarMimeType = _guessImageMimeType(picked.path);
-                                  clearAvatar = false;
-                                });
-                              },
+                            : (supportsCamera
+                                ? () async {
+                                    final messenger = ScaffoldMessenger.of(context);
+                                    try {
+                                      final picker = ImagePicker();
+                                      final picked =
+                                          await picker.pickImage(source: ImageSource.camera);
+                                      if (picked == null) {
+                                        return;
+                                      }
+                                      final bytes = await picked.readAsBytes();
+                                      if (bytes.isEmpty) {
+                                        return;
+                                      }
+                                      setState(() {
+                                        avatarBytes = bytes;
+                                        avatarMimeType = _guessImageMimeType(picked.path);
+                                        clearAvatar = false;
+                                      });
+                                    } catch (_) {
+                                      if (!context.mounted) {
+                                        return;
+                                      }
+                                      messenger.showSnackBar(
+                                        const SnackBar(content: Text('Camera not available.')),
+                                      );
+                                    }
+                                  }
+                                : () {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text('Camera not available.')),
+                                    );
+                                  }),
                         icon: const Icon(Icons.photo_camera),
                         label: const Text('Take photo'),
                       ),
