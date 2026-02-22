@@ -12,6 +12,8 @@ import '../bookmarks/bookmarks_manager.dart';
 import '../pep/pep_manager.dart';
 import '../pep/pep_caps_manager.dart';
 import '../storage/storage_service.dart';
+import '../av/call_session.dart';
+import '../av/media_session.dart';
 import 'blocking.dart';
 import 'http_upload.dart';
 import 'muc_invite.dart';
@@ -160,6 +162,10 @@ class XmppService extends ChangeNotifier {
   String _selfVcardPhotoHash = '';
   bool _selfVcardPhotoKnown = false;
   final Map<String, _FileTransferSession> _fileTransfers = {};
+  final Map<String, CallSession> _callSessions = {};
+  final Map<String, String> _callSessionByBareJid = {};
+  final Map<String, JingleRtpDescription> _callOfferBySid = {};
+  final WebRtcMediaSession _mediaSession = WebRtcMediaSession();
   StreamSubscription<JingleSessionEvent>? _jingleSubscription;
   StreamSubscription<IbbOpen>? _ibbOpenSubscription;
   StreamSubscription<IbbData>? _ibbDataSubscription;
@@ -191,6 +197,13 @@ class XmppService extends ChangeNotifier {
   DateTime? get lastPingAt => _lastPingAt;
   bool get carbonsEnabled => _carbonsEnabled;
   bool isBlocked(String bareJid) => _blockedJids.contains(_bareJid(bareJid));
+  CallSession? callSessionFor(String bareJid) {
+    final key = _callSessionByBareJid[_bareJid(bareJid)];
+    if (key == null) {
+      return null;
+    }
+    return _callSessions[key];
+  }
 
   void attachStorage(StorageService storage) {
     _storage = storage;
@@ -1796,6 +1809,11 @@ class XmppService extends ChangeNotifier {
   }
 
   void _handleJingleSessionInitiate(JingleSessionEvent event) {
+    final rtpDescription = event.content?.rtpDescription;
+    if (rtpDescription != null) {
+      _handleIncomingCall(event, rtpDescription);
+      return;
+    }
     final offer = event.content?.fileOffer;
     final transport = event.content?.ibbTransport;
     if (offer == null || transport == null) {
@@ -1829,6 +1847,13 @@ class XmppService extends ChangeNotifier {
   }
 
   void _handleJingleSessionAccept(JingleSessionEvent event) {
+    final callSession = _callSessions[event.sid];
+    if (callSession != null && callSession.direction == CallDirection.outgoing) {
+      callSession.state = CallState.active;
+      unawaited(_mediaSession.start(audio: true, video: callSession.video));
+      notifyListeners();
+      return;
+    }
     final session = _fileTransfers[event.sid];
     if (session == null || session.incoming) {
       return;
@@ -1842,6 +1867,19 @@ class XmppService extends ChangeNotifier {
   }
 
   void _handleJingleSessionTerminate(JingleSessionEvent event) {
+    final callSession = _callSessions[event.sid];
+    if (callSession != null) {
+      final reason = event.reason ?? '';
+      if (reason == 'decline') {
+        callSession.state = CallState.declined;
+      } else if (reason.isNotEmpty && reason != 'success') {
+        callSession.state = CallState.failed;
+      } else {
+        callSession.state = CallState.ended;
+      }
+      _removeCallSession(callSession);
+      return;
+    }
     final session = _fileTransfers[event.sid];
     if (session == null) {
       return;
@@ -1856,6 +1894,161 @@ class XmppService extends ChangeNotifier {
       state: nextState,
     );
     _finalizeTransfer(session);
+  }
+
+  void _handleIncomingCall(JingleSessionEvent event, JingleRtpDescription description) {
+    final peerBare = event.from.userAtDomain;
+    if (peerBare.isEmpty) {
+      return;
+    }
+    if (_callSessions.containsKey(event.sid)) {
+      return;
+    }
+    final session = CallSession(
+      sid: event.sid,
+      peerBareJid: peerBare,
+      direction: CallDirection.incoming,
+      video: description.media.toLowerCase() == 'video',
+      state: CallState.ringing,
+    );
+    _callSessions[event.sid] = session;
+    _callSessionByBareJid[peerBare] = event.sid;
+    _callOfferBySid[event.sid] = description;
+    notifyListeners();
+  }
+
+  Future<String?> startCall({
+    required String bareJid,
+    bool video = false,
+  }) async {
+    final normalized = _bareJid(bareJid);
+    if (normalized.isEmpty) {
+      return 'Invalid JID.';
+    }
+    if (_callSessionByBareJid.containsKey(normalized)) {
+      return 'Call already in progress.';
+    }
+    final jingle = _jingleManager;
+    if (jingle == null) {
+      return 'Not connected.';
+    }
+    final sid = AbstractStanza.getRandomId();
+    final description = _defaultRtpDescription(video: video);
+    final transport = _placeholderIceTransport();
+    final iq = jingle.buildRtpSessionInitiate(
+      to: Jid.fromFullJid(normalized),
+      sid: sid,
+      contentName: description.media,
+      creator: 'initiator',
+      description: description,
+      transport: transport,
+    );
+    final session = CallSession(
+      sid: sid,
+      peerBareJid: normalized,
+      direction: CallDirection.outgoing,
+      video: video,
+      state: CallState.ringing,
+    );
+    _callSessions[sid] = session;
+    _callSessionByBareJid[normalized] = sid;
+    _callOfferBySid[sid] = description;
+    notifyListeners();
+    final result = await _sendIqAndAwait(iq);
+    if (result == null || result.type != IqStanzaType.RESULT) {
+      session.state = CallState.failed;
+      _removeCallSession(session);
+      return 'Call initiation failed.';
+    }
+    return null;
+  }
+
+  Future<void> acceptCall(CallSession session) async {
+    final jingle = _jingleManager;
+    if (jingle == null) {
+      return;
+    }
+    final description = _callOfferBySid[session.sid] ??
+        _defaultRtpDescription(video: session.video);
+    final transport = _placeholderIceTransport();
+    final iq = jingle.buildRtpSessionAccept(
+      to: Jid.fromFullJid(session.peerBareJid),
+      sid: session.sid,
+      contentName: description.media,
+      creator: 'initiator',
+      description: description,
+      transport: transport,
+    );
+    final result = await _sendIqAndAwait(iq);
+    if (result == null || result.type != IqStanzaType.RESULT) {
+      session.state = CallState.failed;
+      _removeCallSession(session);
+      return;
+    }
+    session.state = CallState.active;
+    notifyListeners();
+    await _mediaSession.start(audio: true, video: session.video);
+  }
+
+  Future<void> declineCall(CallSession session) async {
+    await _sendJingleTerminate(
+      Jid.fromFullJid(session.peerBareJid),
+      session.sid,
+      'decline',
+    );
+    session.state = CallState.declined;
+    _removeCallSession(session);
+  }
+
+  Future<void> endCall(CallSession session) async {
+    await _sendJingleTerminate(
+      Jid.fromFullJid(session.peerBareJid),
+      session.sid,
+      'success',
+    );
+    session.state = CallState.ended;
+    _removeCallSession(session);
+  }
+
+  void _removeCallSession(CallSession session) {
+    _callSessions.remove(session.sid);
+    _callOfferBySid.remove(session.sid);
+    _callSessionByBareJid.remove(session.peerBareJid);
+    unawaited(_mediaSession.stop());
+    notifyListeners();
+  }
+
+  JingleRtpDescription _defaultRtpDescription({required bool video}) {
+    if (video) {
+      return const JingleRtpDescription(
+        media: 'video',
+        payloadTypes: [
+          JingleRtpPayloadType(id: 96, name: 'VP8', clockRate: 90000),
+        ],
+      );
+    }
+    return const JingleRtpDescription(
+      media: 'audio',
+      payloadTypes: [
+        JingleRtpPayloadType(id: 111, name: 'opus', clockRate: 48000, channels: 2),
+      ],
+    );
+  }
+
+  JingleIceTransport _placeholderIceTransport() {
+    return JingleIceTransport(
+      ufrag: _randomToken(6),
+      password: _randomToken(12),
+      candidates: const [],
+    );
+  }
+
+  String _randomToken(int length) {
+    final rand = DateTime.now().microsecondsSinceEpoch.toString();
+    if (rand.length >= length) {
+      return rand.substring(rand.length - length);
+    }
+    return rand.padLeft(length, '0');
   }
 
   void _handleIbbOpen(IbbOpen open) {

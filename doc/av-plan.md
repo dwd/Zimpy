@@ -42,9 +42,10 @@ Deliverables:
   - fallback to IQ-based Jingle if peer lacks support
 
 Deliverables:
-- Jingle session module with full state transitions.
-- Discovery/advertising for call support.
-- JMI (optional, behind feature flag).
+- [x] Jingle RTP description parsing/building (single-content audio or video).
+- [x] Discovery/advertising for call support.
+- [ ] JMI implementation (message-based invite + IQ fallback).
+- [ ] Full session state machine for calls (timeouts, retries, errors).
 
 ## Phase 2 — Transport + Security
 - ICE-UDP transport mapping:
@@ -59,9 +60,10 @@ Deliverables:
   - bind SRTP to negotiated parameters
 
 Deliverables:
-- ICE transport module integrated with Jingle.
-- STUN/TURN configuration via XEP-0215.
-- DTLS-SRTP negotiation and validation.
+- [x] ICE-UDP and DTLS transport parsing/building scaffolding.
+- [ ] ICE candidate exchange / trickle transport-info.
+- [ ] DTLS fingerprint derivation and validation.
+- [ ] STUN/TURN configuration via XEP-0215.
 
 ## Phase 3 — Media Pipeline + UX
 - Audio-only calls first:
@@ -83,9 +85,11 @@ Deliverables:
   - platform-appropriate audio focus handling
 
 Deliverables:
-- Audio call UI and media flow.
-- Video call UI and media flow.
-- Cross-platform call UX parity.
+- [x] WebRTC media session start/stop scaffold.
+- [x] Minimal in-chat call UI (incoming/outgoing/active + accept/decline/hang up).
+- [ ] Media pipeline (offer/answer + track wiring).
+- [ ] Local preview and remote rendering.
+- [ ] Audio routing and device controls.
 
 ## Phase 4 — Advanced A/V (XEP-0479 Advanced Client)
 - RTP feedback and header extensions (XEP-0293/XEP-0294) for QoS.
@@ -93,8 +97,9 @@ Deliverables:
 - Optional: bandwidth estimation integration and adaptive bitrate.
 
 Deliverables:
-- Improved call quality and stability.
-- Advanced feature flags for opt-in rollout.
+- [x] RTP feedback + header extension parsing/building scaffolding.
+- [ ] RTP grouping / SSRC attributes.
+- [ ] Adaptive bitrate integration.
 
 ## Phase 5 — Muji (XEP-0272) Roadmap
 - Build multi-party coordination using MUC (XEP-0045) with Muji semantics:
@@ -105,8 +110,9 @@ Deliverables:
 - Plan for MCU/relay integration for larger rooms if needed.
 
 Deliverables:
-- Muji join/leave and signaling coordination.
-- Multi-party UX (participant list, mute states, speaker indication).
+- [x] Muji session state scaffold.
+- [ ] Muji join/leave and signaling coordination.
+- [ ] Multi-party UX (participant list, mute states, speaker indication).
 
 ## Testing Plan
 ### Unit Tests
@@ -145,6 +151,7 @@ Deliverables:
 8) Muji roadmap
 
 ## Open Questions
-- Is JMI (XEP-0353) required for outbound calls or optional with IQ fallback?
-- Enforce DTLS-SRTP for all calls, or allow legacy fallback?
+- When do we implement JMI (XEP-0353) and its fallback rules in production?
+- How should we map SDP offers/answers to Jingle RTP (and back) for WebRTC interoperability?
+- Do we require multi-content Jingle (audio + video in one session) from day one?
 - For Muji, is mesh-only acceptable initially, or do we need early MCU/relay support?

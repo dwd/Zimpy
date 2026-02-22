@@ -13,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xmpp_stone/xmpp_stone.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'av/call_session.dart';
 import 'models/chat_message.dart';
 import 'models/contact_entry.dart';
 import 'models/room_entry.dart';
@@ -1124,9 +1125,30 @@ class _WimsyHomeState extends State<WimsyHome> {
                     icon: const Icon(Icons.person_add),
                     tooltip: 'Invite to room',
                   ),
+                if (activeChat != null && !isBookmark) ...[
+                  IconButton(
+                    onPressed: service.callSessionFor(activeChat) != null
+                        ? null
+                        : () => _startCall(activeChat, video: false),
+                    icon: const Icon(Icons.call),
+                    tooltip: 'Start voice call',
+                  ),
+                  IconButton(
+                    onPressed: service.callSessionFor(activeChat) != null
+                        ? null
+                        : () => _startCall(activeChat, video: true),
+                    icon: const Icon(Icons.videocam),
+                    tooltip: 'Start video call',
+                  ),
+                ],
               ],
             ),
           ),
+          if (activeChat != null && !isBookmark)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _buildCallBanner(service, activeChat),
+            ),
           const Divider(height: 1),
           Expanded(
             child: activeChat == null
@@ -1410,6 +1432,28 @@ class _WimsyHomeState extends State<WimsyHome> {
     }
   }
 
+  Future<void> _startCall(String bareJid, {required bool video}) async {
+    final result = await widget.service.startCall(bareJid: bareJid, video: video);
+    if (!mounted || result == null) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(result)),
+    );
+  }
+
+  Future<void> _acceptCall(CallSession session) async {
+    await widget.service.acceptCall(session);
+  }
+
+  Future<void> _declineCall(CallSession session) async {
+    await widget.service.declineCall(session);
+  }
+
+  Future<void> _endCall(CallSession session) async {
+    await widget.service.endCall(session);
+  }
+
   void _cancelEditing() {
     if (!mounted) {
       return;
@@ -1471,6 +1515,66 @@ class _WimsyHomeState extends State<WimsyHome> {
       _startEditingMessage(activeChat: activeChat, message: message, isRoom: isRoom);
       break;
     }
+  }
+
+  Widget _buildCallBanner(XmppService service, String bareJid) {
+    final session = service.callSessionFor(bareJid);
+    if (session == null) {
+      return const SizedBox.shrink();
+    }
+    if (session.state != CallState.ringing && session.state != CallState.active) {
+      return const SizedBox.shrink();
+    }
+    final theme = Theme.of(context);
+    final isIncoming = session.direction == CallDirection.incoming;
+    final isActive = session.state == CallState.active;
+    final typeLabel = session.video ? 'video' : 'voice';
+    final title = isActive
+        ? 'In $typeLabel call'
+        : isIncoming
+            ? 'Incoming $typeLabel call'
+            : 'Calling...';
+    return Card(
+      color: theme.colorScheme.surface,
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            Icon(
+              session.video ? Icons.videocam : Icons.call,
+              color: theme.colorScheme.primary,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                title,
+                style: theme.textTheme.bodyMedium,
+              ),
+            ),
+            if (!isActive && isIncoming) ...[
+              TextButton(
+                onPressed: () => _declineCall(session),
+                child: const Text('Decline'),
+              ),
+              const SizedBox(width: 8),
+              FilledButton(
+                onPressed: () => _acceptCall(session),
+                child: const Text('Accept'),
+              ),
+            ] else
+              FilledButton(
+                onPressed: () => _endCall(session),
+                child: const Text('Hang up'),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _sendAttachment(String? activeChat, {required bool isBookmark, RoomEntry? roomEntry}) async {
