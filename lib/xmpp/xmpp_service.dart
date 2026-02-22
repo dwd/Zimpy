@@ -14,6 +14,7 @@ import '../pep/pep_manager.dart';
 import '../pep/pep_caps_manager.dart';
 import '../storage/storage_service.dart';
 import '../av/call_session.dart';
+import '../av/call_quality.dart';
 import '../av/media_session.dart';
 import '../av/sdp_mapper.dart';
 import 'extdisco.dart';
@@ -181,6 +182,10 @@ class XmppService extends ChangeNotifier {
   final Map<String, bool> _callMutedBySid = {};
   final Map<String, bool> _callVideoEnabledBySid = {};
   final Map<String, Timer> _callTimeoutTimers = {};
+  final Map<String, Timer> _callStatsTimers = {};
+  final Map<String, CallQualitySample> _callQualityBySid = {};
+  final Map<String, _CallStatsTracker> _callStatsBySid = {};
+  final CallQualityController _callQualityController = const CallQualityController();
   final Map<String, Timer> _jmiFallbackTimers = {};
   final Map<String, Jid> _jmiProceedTargetBySid = {};
   final Set<String> _jmiIncomingPending = {};
@@ -196,6 +201,7 @@ class XmppService extends ChangeNotifier {
   static const int _ibbDefaultBlockSize = 4096;
   static const Duration _outgoingCallTimeout = Duration(seconds: 45);
   static const Duration _incomingCallTimeout = Duration(seconds: 60);
+  static const Duration _callStatsInterval = Duration(seconds: 5);
   static const String _fileTransferStateOffered = 'offered';
   static const String _fileTransferStateAccepted = 'accepted';
   static const String _fileTransferStateInProgress = 'in_progress';
@@ -243,6 +249,14 @@ class XmppService extends ChangeNotifier {
       return null;
     }
     return _callRemoteStreamBySid[key];
+  }
+
+  CallQualitySample? callQualityFor(String bareJid) {
+    final key = _callSessionByBareJid[_bareJid(bareJid)];
+    if (key == null) {
+      return null;
+    }
+    return _callQualityBySid[key];
   }
 
   bool isCallMuted(String bareJid) {
@@ -1943,6 +1957,7 @@ class XmppService extends ChangeNotifier {
     if (callSession != null && callSession.direction == CallDirection.outgoing) {
       callSession.state = CallState.active;
       _cancelCallTimeout(callSession.sid);
+      _startCallStatsTimer(callSession.sid);
       final rtpContents = event.contents
           .where((content) => content.rtpDescription != null)
           .toList(growable: false);
@@ -2217,6 +2232,7 @@ class XmppService extends ChangeNotifier {
     }
     session.state = CallState.active;
     _cancelCallTimeout(session.sid);
+    _startCallStatsTimer(session.sid);
     notifyListeners();
     await _mediaSession.start(audio: true, video: session.video);
   }
@@ -2311,6 +2327,185 @@ class XmppService extends ChangeNotifier {
     _removeCallSession(session);
   }
 
+  void _startCallStatsTimer(String sid) {
+    _callStatsTimers.remove(sid)?.cancel();
+    _callStatsTimers[sid] = Timer.periodic(_callStatsInterval, (_) {
+      unawaited(_collectCallStats(sid));
+    });
+  }
+
+  Future<void> _collectCallStats(String sid) async {
+    final pc = _callPeerConnections[sid];
+    if (pc == null) {
+      return;
+    }
+    final reports = await pc.getStats();
+    int? outboundBytes;
+    int? inboundBytes;
+    int? packetsLost;
+    int? packetsReceived;
+    double? jitterMs;
+    double? rttMs;
+
+    for (final report in reports) {
+      final values = report.values;
+      final type = report.type;
+      if (type == 'outbound-rtp') {
+        if (_statString(values, 'kind') == 'video' ||
+            _statString(values, 'mediaType') == 'video') {
+          outboundBytes = (outboundBytes ?? 0) + (_statInt(values, 'bytesSent') ?? 0);
+        }
+      }
+      if (type == 'inbound-rtp') {
+        if (_statString(values, 'kind') == 'video' ||
+            _statString(values, 'mediaType') == 'video') {
+          inboundBytes = (inboundBytes ?? 0) + (_statInt(values, 'bytesReceived') ?? 0);
+          packetsLost = (packetsLost ?? 0) + (_statInt(values, 'packetsLost') ?? 0);
+          packetsReceived =
+              (packetsReceived ?? 0) + (_statInt(values, 'packetsReceived') ?? 0);
+          final jitter = _statDouble(values, 'jitter');
+          if (jitter != null) {
+            jitterMs = jitter * 1000;
+          }
+        }
+      }
+      if (type == 'candidate-pair') {
+        final state = _statString(values, 'state');
+        final nominated = values['nominated'] == true || values['selected'] == true;
+        if (state == 'succeeded' && nominated) {
+          final rtt = _statDouble(values, 'currentRoundTripTime');
+          if (rtt != null) {
+            rttMs = rtt * 1000;
+          }
+        }
+      }
+    }
+
+    final tracker = _callStatsBySid[sid] ?? _CallStatsTracker();
+    final now = DateTime.now();
+    final lastAt = tracker.lastSampleAt;
+    double? outboundKbps;
+    double? inboundKbps;
+    if (lastAt != null) {
+      final deltaSeconds = now.difference(lastAt).inMilliseconds / 1000;
+      if (deltaSeconds > 0) {
+        if (outboundBytes != null && tracker.lastOutboundBytes != null) {
+          final delta = outboundBytes - tracker.lastOutboundBytes!;
+          outboundKbps = (delta * 8) / deltaSeconds / 1000;
+        }
+        if (inboundBytes != null && tracker.lastInboundBytes != null) {
+          final delta = inboundBytes - tracker.lastInboundBytes!;
+          inboundKbps = (delta * 8) / deltaSeconds / 1000;
+        }
+      }
+    }
+    double? lossRate;
+    if (packetsLost != null && packetsReceived != null) {
+      final total = packetsLost + packetsReceived;
+      if (total > 0) {
+        lossRate = packetsLost / total;
+      }
+    }
+
+    final sample = CallQualitySample(
+      timestamp: now,
+      rttMs: rttMs,
+      outboundKbps: outboundKbps,
+      inboundKbps: inboundKbps,
+      packetLoss: lossRate,
+      jitterMs: jitterMs,
+      targetVideoBitrateBps: tracker.videoBitrateTargetBps,
+    );
+    _callQualityBySid[sid] = sample;
+    _callStatsBySid[sid] = tracker
+      ..lastSampleAt = now
+      ..lastOutboundBytes = outboundBytes
+      ..lastInboundBytes = inboundBytes
+      ..lastPacketsLost = packetsLost
+      ..lastPacketsReceived = packetsReceived;
+    await _applyAdaptiveBitrate(sid, sample, tracker);
+    notifyListeners();
+  }
+
+  Future<void> _applyAdaptiveBitrate(
+    String sid,
+    CallQualitySample sample,
+    _CallStatsTracker tracker,
+  ) async {
+    final nextTarget = _callQualityController.nextTargetBitrate(
+      currentBps: tracker.videoBitrateTargetBps,
+      sample: sample,
+    );
+    if (nextTarget == null || nextTarget == tracker.videoBitrateTargetBps) {
+      return;
+    }
+    final pc = _callPeerConnections[sid];
+    if (pc == null) {
+      return;
+    }
+    final senders = await pc.getSenders();
+    for (final sender in senders) {
+      final track = sender.track;
+      if (track == null || track.kind != 'video') {
+        continue;
+      }
+      final parameters = sender.parameters;
+      final encodings = parameters.encodings ?? <RTCRtpEncoding>[];
+      if (encodings.isEmpty) {
+        encodings.add(RTCRtpEncoding());
+      }
+      encodings[0].maxBitrate = nextTarget;
+      parameters.encodings = encodings;
+      await sender.setParameters(parameters);
+    }
+    tracker.videoBitrateTargetBps = nextTarget;
+    _callQualityBySid[sid] = CallQualitySample(
+      timestamp: sample.timestamp,
+      rttMs: sample.rttMs,
+      outboundKbps: sample.outboundKbps,
+      inboundKbps: sample.inboundKbps,
+      packetLoss: sample.packetLoss,
+      jitterMs: sample.jitterMs,
+      targetVideoBitrateBps: nextTarget,
+    );
+  }
+
+  int? _statInt(Map<dynamic, dynamic> values, String key) {
+    final value = values[key];
+    if (value is int) {
+      return value;
+    }
+    if (value is num) {
+      return value.toInt();
+    }
+    if (value is String) {
+      return int.tryParse(value);
+    }
+    return null;
+  }
+
+  double? _statDouble(Map<dynamic, dynamic> values, String key) {
+    final value = values[key];
+    if (value is double) {
+      return value;
+    }
+    if (value is num) {
+      return value.toDouble();
+    }
+    if (value is String) {
+      return double.tryParse(value);
+    }
+    return null;
+  }
+
+  String? _statString(Map<dynamic, dynamic> values, String key) {
+    final value = values[key];
+    if (value is String) {
+      return value;
+    }
+    return null;
+  }
+
   void toggleCallMute(String bareJid) {
     final key = _callSessionByBareJid[_bareJid(bareJid)];
     if (key == null) {
@@ -2346,6 +2541,9 @@ class XmppService extends ChangeNotifier {
   void _removeCallSession(CallSession session) {
     _jmiFallbackTimers.remove(session.sid)?.cancel();
     _callTimeoutTimers.remove(session.sid)?.cancel();
+    _callStatsTimers.remove(session.sid)?.cancel();
+    _callStatsBySid.remove(session.sid);
+    _callQualityBySid.remove(session.sid);
     _jmiProceedTargetBySid.remove(session.sid);
     _jmiIncomingPending.remove(session.sid);
     _jmiAutoAcceptBySid.remove(session.sid);
@@ -6125,4 +6323,13 @@ class _ReactionUpdate {
 
   final String targetId;
   final List<String> reactions;
+}
+
+class _CallStatsTracker {
+  DateTime? lastSampleAt;
+  int? lastOutboundBytes;
+  int? lastInboundBytes;
+  int? lastPacketsLost;
+  int? lastPacketsReceived;
+  int? videoBitrateTargetBps;
 }

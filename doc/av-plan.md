@@ -101,7 +101,7 @@ Deliverables:
 Deliverables:
 - [x] RTP feedback + header extension parsing/building scaffolding.
 - [x] RTP grouping / SSRC attributes (ssma).
-- [ ] Adaptive bitrate integration.
+- [x] Adaptive bitrate integration.
 
 ## Phase 5 — Muji (XEP-0272) Roadmap
 - Build multi-party coordination using MUC (XEP-0045) with Muji semantics:
