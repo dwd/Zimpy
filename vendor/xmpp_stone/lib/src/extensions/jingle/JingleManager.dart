@@ -39,18 +39,44 @@ class JingleIbbTransport {
   final String? stanza;
 }
 
+class JingleRtpPayloadType {
+  const JingleRtpPayloadType({
+    required this.id,
+    this.name,
+    this.clockRate,
+    this.channels,
+  });
+
+  final int id;
+  final String? name;
+  final int? clockRate;
+  final int? channels;
+}
+
+class JingleRtpDescription {
+  const JingleRtpDescription({
+    required this.media,
+    required this.payloadTypes,
+  });
+
+  final String media;
+  final List<JingleRtpPayloadType> payloadTypes;
+}
+
 class JingleContent {
   const JingleContent({
     required this.name,
     required this.creator,
     this.fileOffer,
     this.ibbTransport,
+    this.rtpDescription,
   });
 
   final String name;
   final String creator;
   final JingleFileTransferOffer? fileOffer;
   final JingleIbbTransport? ibbTransport;
+  final JingleRtpDescription? rtpDescription;
 }
 
 class JingleSessionEvent {
@@ -78,6 +104,7 @@ class JingleManager {
   static const String fileTransferNamespace = 'urn:xmpp:jingle:apps:file-transfer:5';
   static const String fileMetadataNamespace = 'urn:xmpp:file:metadata:0';
   static const String ibbTransportNamespace = 'urn:xmpp:jingle:transports:ibb:1';
+  static const String rtpNamespace = 'urn:xmpp:jingle:apps:rtp:1';
 
   static final Map<Connection, JingleManager> _instances = {};
 
@@ -158,8 +185,12 @@ class JingleManager {
       final name = child.getAttribute('name')?.value ?? '';
       final description = child.getChild('description');
       final offer = _parseFileOffer(description);
+      final rtpDescription = _parseRtpDescription(description);
       final transport = _parseIbbTransport(child.getChild('transport'));
-      if (name.isEmpty && offer == null && transport == null) {
+      if (name.isEmpty &&
+          offer == null &&
+          transport == null &&
+          rtpDescription == null) {
         continue;
       }
       return JingleContent(
@@ -167,6 +198,7 @@ class JingleManager {
         creator: creator.isEmpty ? 'initiator' : creator,
         fileOffer: offer,
         ibbTransport: transport,
+        rtpDescription: rtpDescription,
       );
     }
     return null;
@@ -220,6 +252,43 @@ class JingleManager {
       sid: sid,
       blockSize: blockSize,
       stanza: stanza,
+    );
+  }
+
+  JingleRtpDescription? _parseRtpDescription(XmppElement? description) {
+    if (description == null ||
+        description.getAttribute('xmlns')?.value != rtpNamespace) {
+      return null;
+    }
+    final media = description.getAttribute('media')?.value ?? '';
+    if (media.isEmpty) {
+      return null;
+    }
+    final payloadTypes = <JingleRtpPayloadType>[];
+    for (final child in description.children) {
+      if (child.name != 'payload-type') {
+        continue;
+      }
+      final idValue = child.getAttribute('id')?.value ?? '';
+      final id = int.tryParse(idValue);
+      if (id == null) {
+        continue;
+      }
+      final name = child.getAttribute('name')?.value;
+      final clockRateValue = child.getAttribute('clockrate')?.value;
+      final clockRate = clockRateValue == null ? null : int.tryParse(clockRateValue);
+      final channelsValue = child.getAttribute('channels')?.value;
+      final channels = channelsValue == null ? null : int.tryParse(channelsValue);
+      payloadTypes.add(JingleRtpPayloadType(
+        id: id,
+        name: (name == null || name.isEmpty) ? null : name,
+        clockRate: clockRate,
+        channels: channels,
+      ));
+    }
+    return JingleRtpDescription(
+      media: media,
+      payloadTypes: payloadTypes,
     );
   }
 
@@ -310,6 +379,46 @@ class JingleManager {
     return stanza;
   }
 
+  IqStanza buildRtpSessionInitiate({
+    required Jid to,
+    required String sid,
+    required String contentName,
+    required String creator,
+    required JingleRtpDescription description,
+  }) {
+    final stanza = IqStanza(AbstractStanza.getRandomId(), IqStanzaType.SET);
+    stanza.toJid = to;
+    stanza.fromJid = _connection.fullJid;
+    stanza.addChild(_buildRtpJinglePayload(
+      action: 'session-initiate',
+      sid: sid,
+      contentName: contentName,
+      creator: creator,
+      description: description,
+    ));
+    return stanza;
+  }
+
+  IqStanza buildRtpSessionAccept({
+    required Jid to,
+    required String sid,
+    required String contentName,
+    required String creator,
+    required JingleRtpDescription description,
+  }) {
+    final stanza = IqStanza(AbstractStanza.getRandomId(), IqStanzaType.SET);
+    stanza.toJid = to;
+    stanza.fromJid = _connection.fullJid;
+    stanza.addChild(_buildRtpJinglePayload(
+      action: 'session-accept',
+      sid: sid,
+      contentName: contentName,
+      creator: creator,
+      description: description,
+    ));
+    return stanza;
+  }
+
   XmppElement _buildJinglePayload({
     required String action,
     required String sid,
@@ -357,5 +466,49 @@ class JingleManager {
 
     jingle.addChild(contentElement);
     return jingle;
+  }
+
+  XmppElement _buildRtpJinglePayload({
+    required String action,
+    required String sid,
+    required String contentName,
+    required String creator,
+    required JingleRtpDescription description,
+  }) {
+    final jingle = XmppElement()..name = 'jingle';
+    jingle.addAttribute(XmppAttribute('xmlns', jingleNamespace));
+    jingle.addAttribute(XmppAttribute('action', action));
+    jingle.addAttribute(XmppAttribute('sid', sid));
+
+    final contentElement = XmppElement()..name = 'content';
+    contentElement.addAttribute(XmppAttribute('creator', creator));
+    contentElement.addAttribute(XmppAttribute('name', contentName));
+    contentElement.addChild(_buildRtpDescription(description));
+    jingle.addChild(contentElement);
+    return jingle;
+  }
+
+  XmppElement _buildRtpDescription(JingleRtpDescription description) {
+    final element = XmppElement()..name = 'description';
+    element.addAttribute(XmppAttribute('xmlns', rtpNamespace));
+    element.addAttribute(XmppAttribute('media', description.media));
+    for (final payload in description.payloadTypes) {
+      final payloadElement = XmppElement()..name = 'payload-type';
+      payloadElement.addAttribute(XmppAttribute('id', payload.id.toString()));
+      final name = payload.name;
+      if (name != null && name.isNotEmpty) {
+        payloadElement.addAttribute(XmppAttribute('name', name));
+      }
+      final clockRate = payload.clockRate;
+      if (clockRate != null) {
+        payloadElement.addAttribute(XmppAttribute('clockrate', clockRate.toString()));
+      }
+      final channels = payload.channels;
+      if (channels != null) {
+        payloadElement.addAttribute(XmppAttribute('channels', channels.toString()));
+      }
+      element.addChild(payloadElement);
+    }
+    return element;
   }
 }

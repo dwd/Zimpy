@@ -72,6 +72,68 @@ void main() {
     expect(responses, isNotEmpty);
     expect(responses.first.type, IqStanzaType.RESULT);
   });
+
+  test('Jingle session-initiate parses RTP description', () async {
+    final account = XmppAccountSettings.fromJid('user@example.com/res', 'pass');
+    final connection = Connection(account);
+    connection.socket = _FakeSocket();
+    final manager = JingleManager.getInstance(connection);
+
+    final completer = Completer<JingleSessionEvent>();
+    manager.sessionStream.listen((event) {
+      completer.complete(event);
+    });
+
+    final iq = '<iq type="set" id="j3" from="peer@example.com/res">'
+        '<jingle xmlns="urn:xmpp:jingle:1" action="session-initiate" sid="sid125">'
+        '<content creator="initiator" name="audio">'
+        '<description xmlns="urn:xmpp:jingle:apps:rtp:1" media="audio">'
+        '<payload-type id="111" name="opus" clockrate="48000" channels="2" />'
+        '</description>'
+        '</content>'
+        '</jingle>'
+        '</iq>';
+
+    connection.handleResponse(connection.prepareStreamResponse(iq));
+
+    final event = await completer.future.timeout(const Duration(seconds: 1));
+    expect(event.content, isNotNull);
+    expect(event.content!.rtpDescription, isNotNull);
+    expect(event.content!.rtpDescription!.media, 'audio');
+    expect(event.content!.rtpDescription!.payloadTypes, hasLength(1));
+    expect(event.content!.rtpDescription!.payloadTypes.first.id, 111);
+    expect(event.content!.rtpDescription!.payloadTypes.first.name, 'opus');
+    expect(event.content!.rtpDescription!.payloadTypes.first.clockRate, 48000);
+    expect(event.content!.rtpDescription!.payloadTypes.first.channels, 2);
+  });
+
+  test('Jingle manager builds RTP session-initiate', () {
+    final account = XmppAccountSettings.fromJid('user@example.com/res', 'pass');
+    final connection = Connection(account);
+    connection.socket = _FakeSocket();
+    final manager = JingleManager.getInstance(connection);
+
+    final stanza = manager.buildRtpSessionInitiate(
+      to: account.fullJid,
+      sid: 'sid126',
+      contentName: 'audio',
+      creator: 'initiator',
+      description: const JingleRtpDescription(
+        media: 'audio',
+        payloadTypes: [
+          JingleRtpPayloadType(id: 0, name: 'PCMU', clockRate: 8000),
+        ],
+      ),
+    );
+
+    final jingle = stanza.getChild('jingle');
+    expect(jingle, isNotNull);
+    final content = jingle!.getChild('content');
+    final description = content?.getChild('description');
+    expect(description?.getAttribute('xmlns')?.value,
+        JingleManager.rtpNamespace);
+    expect(description?.getAttribute('media')?.value, 'audio');
+  });
 }
 
 class _FakeSocket extends Stream<String> implements XmppWebSocket {
