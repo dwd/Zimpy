@@ -18,21 +18,54 @@ JingleSdpMapping mapSdpToJingle({
   required CallMediaKind mediaKind,
 }) {
   final lines = sdp.split('\n').map((line) => line.trim()).toList();
+  final sessionLines = <String>[];
+  final sections = <_SdpSection>[];
+  _SdpSection? current;
+  for (final line in lines) {
+    if (line.startsWith('m=')) {
+      final media = line.substring(2).split(' ').first.trim();
+      current = _SdpSection(media: media, lines: [line]);
+      sections.add(current);
+      continue;
+    }
+    if (current == null) {
+      sessionLines.add(line);
+    } else {
+      current.lines.add(line);
+    }
+  }
+  final desiredMedia = mediaKind == CallMediaKind.video ? 'video' : 'audio';
+  final selected = sections.firstWhere(
+    (section) => section.media == desiredMedia,
+    orElse: () => sections.isNotEmpty ? sections.first : _SdpSection.empty(),
+  );
+  final targetLines = <String>[
+    ...sessionLines,
+    ...selected.lines,
+  ];
+
   String? ufrag;
   String? pwd;
   String? mid;
+  String? msid;
   JingleDtlsFingerprint? fingerprint;
   final payloadTypes = <int, JingleRtpPayloadType>{};
   final feedback = <JingleRtpFeedback>[];
   final headerExtensions = <JingleRtpHeaderExtension>[];
+  final sources = <int, JingleRtpSource>{};
+  final sourceGroups = <JingleRtpSourceGroup>[];
 
-  for (final line in lines) {
+  for (final line in targetLines) {
     if (line.startsWith('a=ice-ufrag:')) {
       ufrag = line.substring('a=ice-ufrag:'.length).trim();
       continue;
     }
     if (line.startsWith('a=ice-pwd:')) {
       pwd = line.substring('a=ice-pwd:'.length).trim();
+      continue;
+    }
+    if (line.startsWith('a=msid:')) {
+      msid = line.substring('a=msid:'.length).trim();
       continue;
     }
     if (line.startsWith('a=mid:')) {
@@ -74,6 +107,7 @@ JingleSdpMapping mapSdpToJingle({
         name: name,
         clockRate: clockRate,
         channels: channels,
+        parameters: payloadTypes[id]?.parameters ?? const {},
       );
       continue;
     }
@@ -155,6 +189,67 @@ JingleSdpMapping mapSdpToJingle({
       headerExtensions.add(JingleRtpHeaderExtension(id: id, uri: uri));
       continue;
     }
+    if (line.startsWith('a=ssrc:')) {
+      final rest = line.substring('a=ssrc:'.length).trim();
+      final spaceIndex = rest.indexOf(' ');
+      if (spaceIndex <= 0) {
+        continue;
+      }
+      final idValue = rest.substring(0, spaceIndex);
+      final ssrc = int.tryParse(idValue);
+      if (ssrc == null) {
+        continue;
+      }
+      final param = rest.substring(spaceIndex + 1);
+      final parts = param.split(':');
+      final name = parts.first.trim();
+      final value = parts.length > 1 ? parts.sublist(1).join(':').trim() : '';
+      final existing = sources[ssrc];
+      final parameters = <String, String>{
+        ...?existing?.parameters,
+      };
+      if (name.isNotEmpty) {
+        parameters[name] = value;
+      }
+      sources[ssrc] = JingleRtpSource(ssrc: ssrc, parameters: parameters);
+      continue;
+    }
+    if (line.startsWith('a=ssrc-group:')) {
+      final rest = line.substring('a=ssrc-group:'.length).trim();
+      final parts = rest.split(' ');
+      if (parts.length < 3) {
+        continue;
+      }
+      final semantics = parts.first;
+      final ssrcs = <int>[];
+      for (final entry in parts.skip(1)) {
+        final ssrc = int.tryParse(entry);
+        if (ssrc != null) {
+          ssrcs.add(ssrc);
+        }
+      }
+      if (semantics.isNotEmpty && ssrcs.isNotEmpty) {
+        sourceGroups.add(JingleRtpSourceGroup(
+          semantics: semantics,
+          sources: ssrcs,
+        ));
+      }
+    }
+  }
+
+  if (msid != null && msid.isNotEmpty && sources.isNotEmpty) {
+    final updated = <int, JingleRtpSource>{};
+    for (final entry in sources.entries) {
+      final parameters = <String, String>{...entry.value.parameters};
+      parameters.putIfAbsent('msid', () => msid!);
+      updated[entry.key] = JingleRtpSource(
+        ssrc: entry.value.ssrc,
+        parameters: parameters,
+      );
+    }
+    sources
+      ..clear()
+      ..addAll(updated);
   }
 
   final description = JingleRtpDescription(
@@ -162,6 +257,8 @@ JingleSdpMapping mapSdpToJingle({
     payloadTypes: payloadTypes.values.toList(),
     rtcpFeedback: feedback,
     headerExtensions: headerExtensions,
+    sources: sources.values.toList(),
+    sourceGroups: sourceGroups,
   );
   final transport = JingleIceTransport(
     ufrag: ufrag ?? '',
@@ -222,5 +319,22 @@ String buildMinimalSdpFromJingle({
   for (final ext in description.headerExtensions) {
     buffer.writeln('a=extmap:${ext.id} ${ext.uri}');
   }
+  for (final source in description.sources) {
+    for (final entry in source.parameters.entries) {
+      buffer.writeln('a=ssrc:${source.ssrc} ${entry.key}:${entry.value}');
+    }
+  }
+  for (final group in description.sourceGroups) {
+    buffer.writeln('a=ssrc-group:${group.semantics} ${group.sources.join(' ')}');
+  }
   return buffer.toString();
+}
+
+class _SdpSection {
+  _SdpSection({required this.media, required this.lines});
+
+  factory _SdpSection.empty() => _SdpSection(media: '', lines: const []);
+
+  final String media;
+  final List<String> lines;
 }

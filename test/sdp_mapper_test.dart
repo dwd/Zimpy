@@ -17,7 +17,9 @@ void main() {
         'a=rtpmap:111 opus/48000/2\n'
         'a=fmtp:111 minptime=10;useinbandfec=1\n'
         'a=rtcp-fb:111 nack pli\n'
-        'a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level\n';
+        'a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level\n'
+        'a=ssrc:1234 cname:abcd\n'
+        'a=ssrc-group:FID 1234 5678\n';
 
     final mapping = mapSdpToJingle(
       sdp: sdp,
@@ -32,6 +34,8 @@ void main() {
     expect(mapping.description.payloadTypes.first.parameters['minptime'], '10');
     expect(mapping.description.rtcpFeedback, isNotEmpty);
     expect(mapping.description.headerExtensions, isNotEmpty);
+    expect(mapping.description.sources, isNotEmpty);
+    expect(mapping.description.sourceGroups, isNotEmpty);
     expect(mapping.contentName, 'audio');
   });
 
@@ -57,6 +61,12 @@ void main() {
             uri: 'urn:ietf:params:rtp-hdrext:ssrc-audio-level',
           ),
         ],
+        sources: [
+          JingleRtpSource(ssrc: 1234, parameters: {'cname': 'abcd'}),
+        ],
+        sourceGroups: [
+          JingleRtpSourceGroup(semantics: 'FID', sources: [1234, 5678]),
+        ],
       ),
       transport: const JingleIceTransport(
         ufrag: 'uf',
@@ -70,5 +80,41 @@ void main() {
     expect(sdp, contains('a=fmtp:111 minptime=10'));
     expect(sdp, contains('a=rtcp-fb:* nack pli'));
     expect(sdp, contains('a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level'));
+    expect(sdp, contains('a=ssrc:1234 cname:abcd'));
+    expect(sdp, contains('a=ssrc-group:FID 1234 5678'));
+  });
+
+  test('mapSdpToJingle selects media section and preserves msid', () {
+    const sdp = 'v=0\n'
+        'o=- 0 0 IN IP4 127.0.0.1\n'
+        's=-\n'
+        't=0 0\n'
+        'a=ice-ufrag:sessionuf\n'
+        'a=ice-pwd:sessionpw\n'
+        'a=fingerprint:sha-256 AA:BB\n'
+        'm=audio 9 UDP/TLS/RTP/SAVPF 111\n'
+        'a=mid:audio0\n'
+        'a=msid:stream1 track1\n'
+        'a=rtpmap:111 opus/48000/2\n'
+        'a=ssrc:1111 cname:audio\n'
+        'm=video 9 UDP/TLS/RTP/SAVPF 96\n'
+        'a=mid:video0\n'
+        'a=rtpmap:96 VP8/90000\n'
+        'a=ssrc:2222 cname:video\n';
+
+    final audioMapping = mapSdpToJingle(
+      sdp: sdp,
+      mediaKind: CallMediaKind.audio,
+    );
+    expect(audioMapping.contentName, 'audio0');
+    expect(audioMapping.description.payloadTypes.first.name, 'opus');
+    expect(audioMapping.description.sources.first.parameters['msid'], 'stream1 track1');
+
+    final videoMapping = mapSdpToJingle(
+      sdp: sdp,
+      mediaKind: CallMediaKind.video,
+    );
+    expect(videoMapping.contentName, 'video0');
+    expect(videoMapping.description.payloadTypes.first.name, 'VP8');
   });
 }

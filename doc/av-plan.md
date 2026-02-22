@@ -45,7 +45,7 @@ Deliverables:
 - [x] Jingle RTP description parsing/building (single-content audio or video).
 - [x] Discovery/advertising for call support.
 - [x] JMI implementation (message-based invite + IQ fallback).
-- [ ] Full session state machine for calls (timeouts, retries, errors).
+- [x] Full session state machine for calls (timeouts, retries, errors).
 
 ## Phase 2 — Transport + Security
 - ICE-UDP transport mapping:
@@ -90,7 +90,7 @@ Deliverables:
 - [x] Media pipeline (offer/answer + track wiring scaffolded).
 - [x] Local preview and remote rendering (minimal).
 - [x] Basic media controls (mute/camera toggle).
-- [ ] Audio routing and device controls.
+- [x] Audio output selection + speaker toggle (basic).
 
 ## Phase 4 — Advanced A/V (XEP-0479 Advanced Client)
 - RTP feedback and header extensions (XEP-0293/XEP-0294) for QoS.
@@ -99,7 +99,7 @@ Deliverables:
 
 Deliverables:
 - [x] RTP feedback + header extension parsing/building scaffolding.
-- [ ] RTP grouping / SSRC attributes.
+- [x] RTP grouping / SSRC attributes (ssma).
 - [ ] Adaptive bitrate integration.
 
 ## Phase 5 — Muji (XEP-0272) Roadmap
@@ -153,6 +153,5 @@ Deliverables:
 
 ## Open Questions
 - When do we implement JMI (XEP-0353) and its fallback rules in production?
-- SDP↔Jingle mapping now covers rtpmap, fmtp parameters, rtcp-fb, extmap, ICE + fingerprint. Remaining gaps: msid, ssrc groups, and multi-content mid handling.
 - Do we require multi-content Jingle (audio + video in one session) from day one?
 - For Muji, is mesh-only acceptable initially, or do we need early MCU/relay support?

@@ -179,18 +179,22 @@ class XmppService extends ChangeNotifier {
   final Map<String, String> _callContentNameBySid = {};
   final Map<String, bool> _callMutedBySid = {};
   final Map<String, bool> _callVideoEnabledBySid = {};
+  final Map<String, Timer> _callTimeoutTimers = {};
   final Map<String, Timer> _jmiFallbackTimers = {};
   final Map<String, Jid> _jmiProceedTargetBySid = {};
   final Set<String> _jmiIncomingPending = {};
   final Set<String> _jmiAutoAcceptBySid = {};
   final Set<String> _jingleInitiatedBySid = {};
   List<Map<String, dynamic>> _iceServers = const [];
+  bool _speakerphoneOn = false;
   StreamSubscription<JingleSessionEvent>? _jingleSubscription;
   StreamSubscription<IbbOpen>? _ibbOpenSubscription;
   StreamSubscription<IbbData>? _ibbDataSubscription;
   StreamSubscription<IbbClose>? _ibbCloseSubscription;
 
   static const int _ibbDefaultBlockSize = 4096;
+  static const Duration _outgoingCallTimeout = Duration(seconds: 45);
+  static const Duration _incomingCallTimeout = Duration(seconds: 60);
   static const String _fileTransferStateOffered = 'offered';
   static const String _fileTransferStateAccepted = 'accepted';
   static const String _fileTransferStateInProgress = 'in_progress';
@@ -254,6 +258,25 @@ class XmppService extends ChangeNotifier {
       return true;
     }
     return _callVideoEnabledBySid[key] ?? true;
+  }
+
+  bool get isSpeakerphoneOn => _speakerphoneOn;
+
+  Future<List<MediaDeviceInfo>> listAudioOutputs() async {
+    return Helper.audiooutputs;
+  }
+
+  Future<void> selectAudioOutput(String deviceId) async {
+    if (deviceId.isEmpty) {
+      return;
+    }
+    await Helper.selectAudioOutput(deviceId);
+  }
+
+  Future<void> toggleSpeakerphone() async {
+    _speakerphoneOn = !_speakerphoneOn;
+    await Helper.setSpeakerphoneOn(_speakerphoneOn);
+    notifyListeners();
   }
 
   void attachStorage(StorageService storage) {
@@ -1867,6 +1890,10 @@ class XmppService extends ChangeNotifier {
     final rtpDescription = event.content?.rtpDescription;
     if (rtpDescription != null) {
       if (_callSessions.containsKey(event.sid)) {
+        final contentName = event.content?.name;
+        if (contentName != null && contentName.isNotEmpty) {
+          _callContentNameBySid[event.sid] = contentName;
+        }
         unawaited(_applyRemoteDescriptionForCall(
           sid: event.sid,
           rtpDescription: rtpDescription,
@@ -1882,7 +1909,12 @@ class XmppService extends ChangeNotifier {
         }
         return;
       }
-      _handleIncomingCall(event, rtpDescription, event.content?.iceTransport);
+      _handleIncomingCall(
+        event,
+        rtpDescription,
+        event.content?.iceTransport,
+        contentName: event.content?.name,
+      );
       return;
     }
     final offer = event.content?.fileOffer;
@@ -1921,6 +1953,7 @@ class XmppService extends ChangeNotifier {
     final callSession = _callSessions[event.sid];
     if (callSession != null && callSession.direction == CallDirection.outgoing) {
       callSession.state = CallState.active;
+      _cancelCallTimeout(callSession.sid);
       unawaited(_applyRemoteDescriptionForCall(
         sid: callSession.sid,
         rtpDescription: event.content?.rtpDescription,
@@ -1975,8 +2008,9 @@ class XmppService extends ChangeNotifier {
   void _handleIncomingCall(
     JingleSessionEvent event,
     JingleRtpDescription description,
-    JingleIceTransport? transport,
-  ) {
+    JingleIceTransport? transport, {
+    String? contentName,
+  }) {
     final peerBare = event.from.userAtDomain;
     if (peerBare.isEmpty) {
       return;
@@ -2001,9 +2035,16 @@ class XmppService extends ChangeNotifier {
     );
     _callSessions[event.sid] = session;
     _callSessionByBareJid[peerBare] = event.sid;
+    _callContentNameBySid[event.sid] =
+        (contentName == null || contentName.isEmpty) ? description.media : contentName;
     _callOfferBySid[event.sid] = description;
     _callMutedBySid[event.sid] = false;
     _callVideoEnabledBySid[event.sid] = session.video;
+    _startCallTimeout(
+      sid: event.sid,
+      duration: _incomingCallTimeout,
+      incoming: true,
+    );
     notifyListeners();
   }
 
@@ -2050,6 +2091,11 @@ class XmppService extends ChangeNotifier {
     _callOfferBySid[sid] = mapping.description;
     _callMutedBySid[sid] = false;
     _callVideoEnabledBySid[sid] = video;
+    _startCallTimeout(
+      sid: sid,
+      duration: _outgoingCallTimeout,
+      incoming: false,
+    );
     notifyListeners();
     _sendJmiPropose(normalized, sid, mapping.description);
     _startJmiFallbackTimer(sid, normalized);
@@ -2110,6 +2156,7 @@ class XmppService extends ChangeNotifier {
       return;
     }
     session.state = CallState.active;
+    _cancelCallTimeout(session.sid);
     notifyListeners();
     await _mediaSession.start(audio: true, video: session.video);
   }
@@ -2150,6 +2197,60 @@ class XmppService extends ChangeNotifier {
     _removeCallSession(session);
   }
 
+  void _startCallTimeout({
+    required String sid,
+    required Duration duration,
+    required bool incoming,
+  }) {
+    _callTimeoutTimers.remove(sid)?.cancel();
+    _callTimeoutTimers[sid] = Timer(duration, () {
+      final session = _callSessions[sid];
+      if (session == null || session.state != CallState.ringing) {
+        return;
+      }
+      if (incoming) {
+        if (_jmiIncomingPending.contains(sid)) {
+          final target = _jmiProceedTargetBySid[sid];
+          if (target != null) {
+            _sendJmiReject(target, sid);
+          }
+        } else {
+          unawaited(_sendJingleTerminate(
+            Jid.fromFullJid(session.peerBareJid),
+            sid,
+            'timeout',
+          ));
+        }
+        session.state = CallState.declined;
+      } else {
+        if (_jmiFallbackTimers.containsKey(sid)) {
+          _sendJmiRetract(Jid.fromFullJid(session.peerBareJid), sid);
+        } else {
+          unawaited(_sendJingleTerminate(
+            Jid.fromFullJid(session.peerBareJid),
+            sid,
+            'timeout',
+          ));
+        }
+        session.state = CallState.failed;
+      }
+      _removeCallSession(session);
+    });
+  }
+
+  void _cancelCallTimeout(String sid) {
+    _callTimeoutTimers.remove(sid)?.cancel();
+  }
+
+  void _failCallSession(String sid, CallState state) {
+    final session = _callSessions[sid];
+    if (session == null) {
+      return;
+    }
+    session.state = state;
+    _removeCallSession(session);
+  }
+
   void toggleCallMute(String bareJid) {
     final key = _callSessionByBareJid[_bareJid(bareJid)];
     if (key == null) {
@@ -2184,6 +2285,7 @@ class XmppService extends ChangeNotifier {
 
   void _removeCallSession(CallSession session) {
     _jmiFallbackTimers.remove(session.sid)?.cancel();
+    _callTimeoutTimers.remove(session.sid)?.cancel();
     _jmiProceedTargetBySid.remove(session.sid);
     _jmiIncomingPending.remove(session.sid);
     _jmiAutoAcceptBySid.remove(session.sid);
@@ -2250,7 +2352,7 @@ class XmppService extends ChangeNotifier {
           return;
         }
         _jmiFallbackTimers.remove(sid)?.cancel();
-        _sendPendingJingleInitiate(sid, fromJid);
+        unawaited(_sendPendingJingleInitiate(sid, fromJid));
         return;
       case JmiAction.reject:
       case JmiAction.retract:
@@ -2305,11 +2407,11 @@ class XmppService extends ChangeNotifier {
   void _startJmiFallbackTimer(String sid, String bareJid) {
     _jmiFallbackTimers[sid]?.cancel();
     _jmiFallbackTimers[sid] = Timer(const Duration(seconds: 5), () {
-      _sendPendingJingleInitiate(sid, Jid.fromFullJid(bareJid));
+      unawaited(_sendPendingJingleInitiate(sid, Jid.fromFullJid(bareJid)));
     });
   }
 
-  void _sendPendingJingleInitiate(String sid, Jid to) {
+  Future<void> _sendPendingJingleInitiate(String sid, Jid to) async {
     final jingle = _jingleManager;
     if (jingle == null) {
       return;
@@ -2332,7 +2434,10 @@ class XmppService extends ChangeNotifier {
       transport: transport,
     );
     _jingleInitiatedBySid.add(sid);
-    unawaited(_sendIqAndAwait(iq));
+    final result = await _sendIqAndAwait(iq);
+    if (result == null || result.type != IqStanzaType.RESULT) {
+      _failCallSession(sid, CallState.failed);
+    }
   }
 
   Future<void> _applyRemoteDescriptionForCall({
@@ -2367,6 +2472,10 @@ class XmppService extends ChangeNotifier {
       return;
     }
     _callRemoteTransportBySid[event.sid] = transport;
+    final contentName = event.content?.name;
+    if (contentName != null && contentName.isNotEmpty) {
+      _callContentNameBySid[event.sid] = contentName;
+    }
     final pc = _callPeerConnections[event.sid];
     if (pc == null) {
       return;
@@ -2428,10 +2537,12 @@ class XmppService extends ChangeNotifier {
       if (jingle == null) {
         return;
       }
+      final contentName = _callContentNameBySid[sid] ??
+          (kind == CallMediaKind.video ? 'video' : 'audio');
       final info = jingle.buildTransportInfo(
         to: Jid.fromFullJid(peerBareJid),
         sid: sid,
-        contentName: kind == CallMediaKind.video ? 'video' : 'audio',
+        contentName: contentName,
         creator: 'initiator',
         transport: JingleIceTransport(
           ufrag: transport.ufrag,
