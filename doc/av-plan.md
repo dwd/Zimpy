@@ -17,6 +17,7 @@ This plan targets voice and video calling across all platforms using the XEP-047
   - DTLS-SRTP parameters
   - stats and call quality metrics
 - Security baseline: DTLS-SRTP (XEP-0320) required for all media.
+- WebRTC stack decision: use `flutter_webrtc` across mobile, desktop, and web to provide a consistent MediaDevices/RTC API surface.
 - Linux camera access: use the WebRTC camera stack on Linux for A/V and avatars (image_picker does not support ImageSource.camera).
 
 Deliverables:
