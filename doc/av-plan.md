@@ -8,16 +8,16 @@ This plan targets voice and video calling across all platforms using the XEP-047
 
 ## Phase 0 — Architecture + Decisions
 - Decide signaling flow: Jingle (XEP-0166) for session control + Jingle RTP (XEP-0167) for media.
-- Decide whether to require Jingle Message Initiation (XEP-0353) or use it opportunistically with IQ fallback.
-- Decide transport priority: ICE-UDP (XEP-0176) as primary; optional Raw-UDP fallback if needed.
+- Decide Jingle Message Initiation (XEP-0353) usage: use JMI when supported, with IQ fallback.
+- Decide transport priority: ICE-UDP (XEP-0176) as primary; no Raw-UDP fallback.
 - Choose a WebRTC media stack per platform and expose a uniform abstraction for:
   - local media capture (audio/video)
   - codecs and payload mapping
   - ICE candidates
   - DTLS-SRTP parameters
   - stats and call quality metrics
-- Security baseline: DTLS-SRTP (XEP-0320) for all media.
-- Linux camera access: image_picker does not support ImageSource.camera on Linux. For A/V we must use a WebRTC-capable camera stack (or another Linux-capable capture plugin) and expose it via the media abstraction.
+- Security baseline: DTLS-SRTP (XEP-0320) required for all media.
+- Linux camera access: use the WebRTC camera stack on Linux for A/V and avatars (image_picker does not support ImageSource.camera).
 
 Deliverables:
 - Architecture doc outlining signaling flow, media abstraction, and platform-specific choices.
