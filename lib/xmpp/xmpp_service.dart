@@ -16,6 +16,7 @@ import '../storage/storage_service.dart';
 import '../av/call_session.dart';
 import '../av/call_quality.dart';
 import '../av/media_session.dart';
+import '../av/muji_session.dart';
 import '../av/sdp_mapper.dart';
 import 'extdisco.dart';
 import 'jmi.dart';
@@ -111,6 +112,7 @@ class XmppService extends ChangeNotifier {
   final List<ContactEntry> _bookmarks = [];
   final Map<String, RoomEntry> _rooms = {};
   final Map<String, Set<String>> _roomOccupants = {};
+  final Map<String, MujiSessionState> _mujiSessions = {};
   final Map<String, StreamSubscription> _roomSubscriptions = {};
   final Map<String, PresenceData> _presenceByBareJid = {};
   final Map<String, DateTime> _lastSeenAt = {};
@@ -168,7 +170,7 @@ class XmppService extends ChangeNotifier {
   bool _selfVcardPhotoKnown = false;
   final Map<String, _FileTransferSession> _fileTransfers = {};
   final Map<String, CallSession> _callSessions = {};
-  final Map<String, String> _callSessionByBareJid = {};
+  final Map<String, String> _callSessionByPeerKey = {};
   final Map<String, Map<String, JingleRtpDescription>> _callLocalDescriptionsBySid = {};
   final Map<String, Map<String, JingleRtpDescription>> _callRemoteDescriptionsBySid = {};
   final WebRtcMediaSession _mediaSession = WebRtcMediaSession();
@@ -228,7 +230,7 @@ class XmppService extends ChangeNotifier {
   bool get carbonsEnabled => _carbonsEnabled;
   bool isBlocked(String bareJid) => _blockedJids.contains(_bareJid(bareJid));
   CallSession? callSessionFor(String bareJid) {
-    final key = _callSessionByBareJid[_bareJid(bareJid)];
+    final key = _callSessionByPeerKey[_callPeerKeyForJid(bareJid)];
     if (key == null) {
       return null;
     }
@@ -236,7 +238,7 @@ class XmppService extends ChangeNotifier {
   }
 
   MediaStream? callLocalStreamFor(String bareJid) {
-    final key = _callSessionByBareJid[_bareJid(bareJid)];
+    final key = _callSessionByPeerKey[_callPeerKeyForJid(bareJid)];
     if (key == null) {
       return null;
     }
@@ -244,7 +246,7 @@ class XmppService extends ChangeNotifier {
   }
 
   MediaStream? callRemoteStreamFor(String bareJid) {
-    final key = _callSessionByBareJid[_bareJid(bareJid)];
+    final key = _callSessionByPeerKey[_callPeerKeyForJid(bareJid)];
     if (key == null) {
       return null;
     }
@@ -252,7 +254,7 @@ class XmppService extends ChangeNotifier {
   }
 
   CallQualitySample? callQualityFor(String bareJid) {
-    final key = _callSessionByBareJid[_bareJid(bareJid)];
+    final key = _callSessionByPeerKey[_callPeerKeyForJid(bareJid)];
     if (key == null) {
       return null;
     }
@@ -260,7 +262,7 @@ class XmppService extends ChangeNotifier {
   }
 
   bool isCallMuted(String bareJid) {
-    final key = _callSessionByBareJid[_bareJid(bareJid)];
+    final key = _callSessionByPeerKey[_callPeerKeyForJid(bareJid)];
     if (key == null) {
       return false;
     }
@@ -268,7 +270,7 @@ class XmppService extends ChangeNotifier {
   }
 
   bool isCallVideoEnabled(String bareJid) {
-    final key = _callSessionByBareJid[_bareJid(bareJid)];
+    final key = _callSessionByPeerKey[_callPeerKeyForJid(bareJid)];
     if (key == null) {
       return true;
     }
@@ -276,6 +278,10 @@ class XmppService extends ChangeNotifier {
   }
 
   bool get isSpeakerphoneOn => _speakerphoneOn;
+
+  MujiSessionState? mujiSessionFor(String roomJid) {
+    return _mujiSessions[_bareJid(roomJid)];
+  }
 
   Future<List<MediaDeviceInfo>> listAudioOutputs() async {
     return Helper.audiooutputs;
@@ -768,6 +774,8 @@ class XmppService extends ChangeNotifier {
     _seededRoomMessageJids.clear();
     _rooms.clear();
     _roomOccupants.clear();
+    _mujiSessions.clear();
+    _mujiSessions.clear();
     _presenceByBareJid.clear();
     _lastSeenAt.clear();
     _serverNotFound.clear();
@@ -1173,6 +1181,13 @@ class XmppService extends ChangeNotifier {
     _sendDirectedPresenceToRoom(normalized, resolvedNick);
   }
 
+  void joinMujiRoom(String roomJid, {String? nick, String? password}) {
+    joinRoom(roomJid, nick: nick, password: password);
+    final normalized = _bareJid(roomJid);
+    _mujiSessions.putIfAbsent(normalized, () => MujiSessionState());
+    notifyListeners();
+  }
+
   void leaveRoom(String roomJid) {
     final muc = _mucManager;
     final entry = _rooms[_bareJid(roomJid)];
@@ -1181,6 +1196,12 @@ class XmppService extends ChangeNotifier {
     }
     muc.leaveRoom(Jid.fromFullJid(entry.roomJid), entry.nick!);
     _rooms[entry.roomJid] = entry.copyWith(joined: false);
+    notifyListeners();
+  }
+
+  void leaveMujiRoom(String roomJid) {
+    leaveRoom(roomJid);
+    _mujiSessions.remove(_bareJid(roomJid));
     notifyListeners();
   }
 
@@ -1862,6 +1883,17 @@ class XmppService extends ChangeNotifier {
       } else {
         occupants.add(presence.nick);
       }
+      final mujiSession = _mujiSessions[roomJid];
+      if (mujiSession != null && presence.nick.isNotEmpty) {
+        final participantJid = Jid.fromFullJid('$roomJid/${presence.nick}');
+        if (presence.unavailable) {
+          mujiSession.removeParticipant(participantJid);
+        } else {
+          mujiSession.addParticipant(
+            MujiParticipant(jid: participantJid, nick: presence.nick),
+          );
+        }
+      }
       final existing = _rooms[roomJid] ?? RoomEntry(roomJid: roomJid);
       final next = existing.copyWith(
         joined: existing.joined || presence.isSelf,
@@ -2013,8 +2045,8 @@ class XmppService extends ChangeNotifier {
   }
 
   void _handleIncomingCall(JingleSessionEvent event, List<JingleContent> contents) {
-    final peerBare = event.from.userAtDomain;
-    if (peerBare.isEmpty) {
+    final peerJid = event.from.fullJid ?? event.from.userAtDomain;
+    if (peerJid.isEmpty) {
       return;
     }
     if (_callSessions.containsKey(event.sid)) {
@@ -2026,13 +2058,13 @@ class XmppService extends ChangeNotifier {
     _callMediaKindBySid[event.sid] = hasVideo ? CallMediaKind.video : CallMediaKind.audio;
     final session = CallSession(
       sid: event.sid,
-      peerBareJid: peerBare,
+      peerBareJid: peerJid,
       direction: CallDirection.incoming,
       video: hasVideo,
       state: CallState.ringing,
     );
     _callSessions[event.sid] = session;
-    _callSessionByBareJid[peerBare] = event.sid;
+    _callSessionByPeerKey[_callPeerKeyForJid(peerJid)] = event.sid;
     _callContentNamesBySid[event.sid] = _contentNamesFor(contents);
     _callMutedBySid[event.sid] = false;
     _callVideoEnabledBySid[event.sid] = session.video;
@@ -2112,11 +2144,11 @@ class XmppService extends ChangeNotifier {
     required String bareJid,
     bool video = false,
   }) async {
-    final normalized = _bareJid(bareJid);
-    if (normalized.isEmpty) {
+    final peerKey = _callPeerKeyForJid(bareJid);
+    if (peerKey.isEmpty) {
       return 'Invalid JID.';
     }
-    if (_callSessionByBareJid.containsKey(normalized)) {
+    if (_callSessionByPeerKey.containsKey(peerKey)) {
       return 'Call already in progress.';
     }
     final jingle = _jingleManager;
@@ -2128,7 +2160,7 @@ class XmppService extends ChangeNotifier {
     _callMediaKindBySid[sid] = kind;
     final pc = await _createPeerConnection(
       sid: sid,
-      peerBareJid: normalized,
+      peerBareJid: bareJid,
       kind: kind,
     );
     if (pc == null) {
@@ -2152,13 +2184,13 @@ class XmppService extends ChangeNotifier {
         mappings.map((mapping) => mapping.contentName).toList(growable: false);
     final session = CallSession(
       sid: sid,
-      peerBareJid: normalized,
+      peerBareJid: bareJid,
       direction: CallDirection.outgoing,
       video: video,
       state: CallState.ringing,
     );
     _callSessions[sid] = session;
-    _callSessionByBareJid[normalized] = sid;
+    _callSessionByPeerKey[peerKey] = sid;
     _callMutedBySid[sid] = false;
     _callVideoEnabledBySid[sid] = video;
     _startCallTimeout(
@@ -2167,9 +2199,14 @@ class XmppService extends ChangeNotifier {
       incoming: false,
     );
     notifyListeners();
-    final proposeMapping = _selectPrimaryMapping(mappings);
-    _sendJmiPropose(normalized, sid, proposeMapping.description);
-    _startJmiFallbackTimer(sid, normalized);
+    if (_isMujiParticipantJid(bareJid)) {
+      unawaited(_sendPendingJingleInitiate(sid, Jid.fromFullJid(bareJid)));
+    } else {
+      final proposeMapping = _selectPrimaryMapping(mappings);
+      final target = _bareJid(bareJid);
+      _sendJmiPropose(target, sid, proposeMapping.description);
+      _startJmiFallbackTimer(sid, target);
+    }
     return null;
   }
 
@@ -2507,7 +2544,7 @@ class XmppService extends ChangeNotifier {
   }
 
   void toggleCallMute(String bareJid) {
-    final key = _callSessionByBareJid[_bareJid(bareJid)];
+    final key = _callSessionByPeerKey[_callPeerKeyForJid(bareJid)];
     if (key == null) {
       return;
     }
@@ -2523,7 +2560,7 @@ class XmppService extends ChangeNotifier {
   }
 
   void toggleCallVideo(String bareJid) {
-    final key = _callSessionByBareJid[_bareJid(bareJid)];
+    final key = _callSessionByPeerKey[_callPeerKeyForJid(bareJid)];
     if (key == null) {
       return;
     }
@@ -2561,7 +2598,7 @@ class XmppService extends ChangeNotifier {
     _callMutedBySid.remove(session.sid);
     _callVideoEnabledBySid.remove(session.sid);
     _callSessions.remove(session.sid);
-    _callSessionByBareJid.remove(session.peerBareJid);
+    _callSessionByPeerKey.remove(_callPeerKeyForJid(session.peerBareJid));
     unawaited(_mediaSession.stop());
     notifyListeners();
   }
@@ -5503,6 +5540,28 @@ class XmppService extends ChangeNotifier {
       return trimmed;
     }
     return trimmed.substring(0, slashIndex);
+  }
+
+  String _callPeerKeyForJid(String jid) {
+    final parsed = Jid.fromFullJid(jid);
+    final bare = _bareJid(parsed.userAtDomain);
+    final resource = parsed.resource;
+    if (resource != null &&
+        resource.isNotEmpty &&
+        _mujiSessions.containsKey(bare)) {
+      return '$bare/$resource';
+    }
+    return bare;
+  }
+
+  bool _isMujiParticipantJid(String jid) {
+    final parsed = Jid.fromFullJid(jid);
+    final resource = parsed.resource;
+    if (resource == null || resource.isEmpty) {
+      return false;
+    }
+    final bare = _bareJid(parsed.userAtDomain);
+    return _mujiSessions.containsKey(bare);
   }
 
   bool _isTerminalError(XmppConnectionState state) {

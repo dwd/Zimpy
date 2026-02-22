@@ -113,7 +113,7 @@ Deliverables:
 
 Deliverables:
 - [x] Muji session state scaffold.
-- [ ] Muji join/leave and signaling coordination.
+- [x] Muji join/leave and signaling coordination.
 - [ ] Multi-party UX (participant list, mute states, speaker indication).
 
 ## Testing Plan
