@@ -22,6 +22,8 @@ import 'notifications/notification_service.dart';
 import 'storage/account_record.dart';
 import 'storage/storage_service.dart';
 import 'xmpp/xmpp_service.dart';
+import 'xmpp/alt_connection.dart';
+import 'xmpp/ws_endpoint.dart';
 import 'background/foreground_task_handler.dart';
 import 'utils/xep0392_color.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
@@ -355,6 +357,11 @@ class _WimsyHomeState extends State<WimsyHome> {
   bool _rememberPassword = false;
   bool _useWebSocket = kIsWeb;
   bool _useDirectTls = false;
+  Timer? _endpointDiscoveryDebounce;
+  bool _advancedOptionsExpanded = false;
+  bool _endpointDiscoveryBusy = false;
+  String? _endpointDiscoveryMessage;
+  String? _lastEndpointDiscoveryDomain;
   Timer? _typingDebounce;
   Timer? _idleTimer;
   ChatState? _lastSentChatState;
@@ -448,6 +455,7 @@ class _WimsyHomeState extends State<WimsyHome> {
   void dispose() {
     _typingDebounce?.cancel();
     _idleTimer?.cancel();
+    _endpointDiscoveryDebounce?.cancel();
     _messageScrollController.removeListener(_handleScrollPosition);
     HardwareKeyboard.instance.removeHandler(_handleHardwareKey);
     _messageFocusNode.dispose();
@@ -569,7 +577,32 @@ class _WimsyHomeState extends State<WimsyHome> {
                             labelText: 'JID',
                             hintText: 'user@domain',
                           ),
+                          onChanged: (value) => _scheduleEndpointDiscovery(value),
+                          onEditingComplete: () =>
+                              _scheduleEndpointDiscovery(_jidController.text.trim(), immediate: true),
                         ),
+                        if (_endpointDiscoveryMessage != null) ...[
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              if (_endpointDiscoveryBusy)
+                                const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                ),
+                              if (_endpointDiscoveryBusy) const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _endpointDiscoveryMessage!,
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
                         const SizedBox(height: 12),
                         TextField(
                           controller: _passwordController,
@@ -580,57 +613,7 @@ class _WimsyHomeState extends State<WimsyHome> {
                           ),
                         ),
                         const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            Expanded(
-                              flex: 2,
-                              child: TextField(
-                                controller: _hostController,
-                                enabled: !service.isConnecting,
-                                decoration: const InputDecoration(
-                                  labelText: 'Host (optional)',
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: TextField(
-                                controller: _portController,
-                                enabled: !service.isConnecting,
-                                keyboardType: TextInputType.number,
-                                decoration: const InputDecoration(
-                                  labelText: 'Port',
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        CheckboxListTile(
-                          contentPadding: EdgeInsets.zero,
-                          dense: true,
-                          title: const Text('Direct TLS (XEP-0368)'),
-                          subtitle: const Text('Uses direct TLS when the server advertises it via SRV.'),
-                          value: _useDirectTls,
-                          onChanged: service.isConnecting || kIsWeb
-                              ? null
-                              : (value) {
-                                  if (value == null) {
-                                    return;
-                                  }
-                                  setState(() {
-                                    _useDirectTls = value;
-                                  });
-                                },
-                        ),
-                        const SizedBox(height: 12),
-                        TextField(
-                          controller: _resourceController,
-                          enabled: !service.isConnecting,
-                          decoration: const InputDecoration(
-                            labelText: 'Resource',
-                          ),
-                        ),
+                        _buildAdvancedOptions(service, theme),
                         const SizedBox(height: 12),
                         CheckboxListTile(
                           contentPadding: EdgeInsets.zero,
@@ -648,45 +631,6 @@ class _WimsyHomeState extends State<WimsyHome> {
                                   });
                                 },
                         ),
-                        CheckboxListTile(
-                          contentPadding: EdgeInsets.zero,
-                          dense: true,
-                          title: const Text('Use WebSocket transport'),
-                          subtitle: kIsWeb
-                              ? const Text('Required for web builds.')
-                              : const Text('Useful for testing server WebSocket support.'),
-                          value: kIsWeb ? true : _useWebSocket,
-                          onChanged: service.isConnecting || kIsWeb
-                              ? null
-                              : (value) {
-                                  if (value == null) {
-                                    return;
-                                  }
-                                  setState(() {
-                                    _useWebSocket = value;
-                                  });
-                                },
-                        ),
-                        if (_useWebSocket || kIsWeb) ...[
-                          const SizedBox(height: 12),
-                          TextField(
-                            controller: _wsEndpointController,
-                            enabled: !service.isConnecting,
-                            decoration: const InputDecoration(
-                              labelText: 'WebSocket endpoint',
-                              hintText: 'wss://host/xmpp-websocket',
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          TextField(
-                            controller: _wsProtocolsController,
-                            enabled: !service.isConnecting,
-                            decoration: const InputDecoration(
-                              labelText: 'WebSocket subprotocols (optional)',
-                              hintText: 'xmpp, stanza',
-                            ),
-                          ),
-                        ],
                         const SizedBox(height: 20),
                         Row(
                           children: [
@@ -1689,6 +1633,119 @@ class _WimsyHomeState extends State<WimsyHome> {
     );
   }
 
+  Widget _buildAdvancedOptions(XmppService service, ThemeData theme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextButton.icon(
+          onPressed: service.isConnecting
+              ? null
+              : () {
+                  setState(() {
+                    _advancedOptionsExpanded = !_advancedOptionsExpanded;
+                  });
+                },
+          icon: Icon(_advancedOptionsExpanded ? Icons.expand_less : Icons.expand_more),
+          label: Text(_advancedOptionsExpanded ? 'Hide advanced options' : 'Show advanced options'),
+        ),
+        if (_advancedOptionsExpanded) ...[
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Expanded(
+                flex: 2,
+                child: TextField(
+                  controller: _hostController,
+                  enabled: !service.isConnecting,
+                  decoration: const InputDecoration(
+                    labelText: 'Host (optional)',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: TextField(
+                  controller: _portController,
+                  enabled: !service.isConnecting,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Port',
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          CheckboxListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: const Text('Direct TLS (XEP-0368)'),
+            subtitle: const Text('Uses direct TLS when the server advertises it via SRV.'),
+            value: _useDirectTls,
+            onChanged: service.isConnecting || kIsWeb
+                ? null
+                : (value) {
+                    if (value == null) {
+                      return;
+                    }
+                    setState(() {
+                      _useDirectTls = value;
+                    });
+                  },
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _resourceController,
+            enabled: !service.isConnecting,
+            decoration: const InputDecoration(
+              labelText: 'Resource',
+            ),
+          ),
+          const SizedBox(height: 12),
+          CheckboxListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: const Text('Use WebSocket transport'),
+            subtitle: kIsWeb
+                ? const Text('Required for web builds.')
+                : const Text('Useful for testing server WebSocket support.'),
+            value: kIsWeb ? true : _useWebSocket,
+            onChanged: service.isConnecting || kIsWeb
+                ? null
+                : (value) {
+                    if (value == null) {
+                      return;
+                    }
+                    setState(() {
+                      _useWebSocket = value;
+                    });
+                  },
+          ),
+          if (_useWebSocket || kIsWeb) ...[
+            const SizedBox(height: 12),
+            TextField(
+              controller: _wsEndpointController,
+              enabled: !service.isConnecting,
+              decoration: const InputDecoration(
+                labelText: 'WebSocket endpoint',
+                hintText: 'wss://host/xmpp-websocket',
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _wsProtocolsController,
+              enabled: !service.isConnecting,
+              decoration: const InputDecoration(
+                labelText: 'WebSocket subprotocols (optional)',
+                hintText: 'xmpp, stanza',
+              ),
+            ),
+          ],
+        ],
+      ],
+    );
+  }
+
   Widget _buildMujiParticipantBar(XmppService service, String roomJid) {
     final session = service.mujiSessionFor(roomJid);
     if (session == null) {
@@ -2419,6 +2476,78 @@ class _WimsyHomeState extends State<WimsyHome> {
     }
     _lastSentChatState = state;
     widget.service.setMyChatState(bareJid, state);
+  }
+
+  void _scheduleEndpointDiscovery(String jid, {bool immediate = false}) {
+    if (!kIsWeb && !_useWebSocket) {
+      return;
+    }
+    final trimmed = jid.trim();
+    if (trimmed.isEmpty) {
+      if (_endpointDiscoveryMessage != null) {
+        setState(() {
+          _endpointDiscoveryMessage = null;
+          _endpointDiscoveryBusy = false;
+        });
+      }
+      return;
+    }
+    _endpointDiscoveryDebounce?.cancel();
+    if (immediate) {
+      unawaited(_discoverEndpoint(trimmed));
+      return;
+    }
+    _endpointDiscoveryDebounce =
+        Timer(const Duration(milliseconds: 700), () => _discoverEndpoint(trimmed));
+  }
+
+  Future<void> _discoverEndpoint(String jid) async {
+    final parsed = Jid.fromFullJid(jid);
+    if (!parsed.isValid()) {
+      return;
+    }
+    final domain = _domainFromBareJid(parsed.userAtDomain);
+    if (domain.isEmpty) {
+      return;
+    }
+    if (_endpointDiscoveryBusy && _lastEndpointDiscoveryDomain == domain) {
+      return;
+    }
+    if (_lastEndpointDiscoveryDomain == domain &&
+        _wsEndpointController.text.trim().isNotEmpty) {
+      return;
+    }
+    setState(() {
+      _endpointDiscoveryBusy = true;
+      _endpointDiscoveryMessage = 'Discovering WebSocket endpoint…';
+    });
+    _lastEndpointDiscoveryDomain = domain;
+    final discovered = await discoverWebSocketEndpoint(domain);
+    if (!mounted) {
+      return;
+    }
+    if (discovered != null) {
+      final parsedEndpoint = parseWsEndpoint(discovered.toString());
+      if (parsedEndpoint != null) {
+        _wsEndpointController.text = parsedEndpoint.uri.toString();
+      }
+      setState(() {
+        _endpointDiscoveryBusy = false;
+        _endpointDiscoveryMessage = 'WebSocket endpoint discovered for $domain.';
+      });
+      return;
+    }
+    setState(() {
+      _endpointDiscoveryBusy = false;
+      _endpointDiscoveryMessage =
+          'Could not discover a WebSocket endpoint for $domain. Enter one in advanced options.';
+      _advancedOptionsExpanded = true;
+    });
+  }
+
+  String _domainFromBareJid(String bareJid) {
+    final parts = bareJid.split('@');
+    return parts.length == 2 ? parts[1] : '';
   }
 
   void _handleAutoScroll(int messageCount) {
