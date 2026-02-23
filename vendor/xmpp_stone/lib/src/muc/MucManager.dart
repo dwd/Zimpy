@@ -125,6 +125,7 @@ class MucManager {
       affiliation: affiliation,
       isSelf: isSelf,
       unavailable: isUnavailable,
+      statusCodes: statusCodes,
     );
     _presenceController.add(presence);
   }
@@ -362,6 +363,7 @@ class MucPresenceUpdate {
     this.affiliation,
     required this.isSelf,
     required this.unavailable,
+    required this.statusCodes,
   });
 
   final String roomJid;
@@ -370,6 +372,7 @@ class MucPresenceUpdate {
   final String? affiliation;
   final bool isSelf;
   final bool unavailable;
+  final Set<String> statusCodes;
 }
 
 class MucSubjectUpdate {

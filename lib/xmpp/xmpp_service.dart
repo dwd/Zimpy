@@ -1958,6 +1958,12 @@ class XmppService extends ChangeNotifier {
         _mucManager!.roomPresenceStream.listen((presence) {
       _noteRoomTraffic(presence.roomJid);
       final roomJid = _bareJid(presence.roomJid);
+      if (presence.isSelf &&
+          presence.statusCodes.contains('201') &&
+          !_mucDefaultConfigSent.contains(roomJid)) {
+        _mucDefaultConfigSent.add(roomJid);
+        _sendMucDefaultConfig(roomJid);
+      }
       final occupants = _roomOccupants.putIfAbsent(roomJid, () => <String>{});
       if (presence.unavailable) {
         occupants.remove(presence.nick);
@@ -4023,7 +4029,6 @@ class XmppService extends ChangeNotifier {
       _pepCapsManager?.handleStanza(stanza);
       _bookmarksManager?.handleStanza(stanza);
       if (stanza is PresenceStanza) {
-        _handleMucRoomCreatedPresence(stanza);
         _handleVcardPresenceUpdate(stanza);
       }
     });
@@ -4524,9 +4529,6 @@ class XmppService extends ChangeNotifier {
       final replaceId = _extractReplaceIdFromStanza(message.messageStanza);
       final reaction = _extractReactionUpdate(message.messageStanza);
       final invite = parseMucDirectInvite(message.messageStanza);
-      if (invite == null && isMucMediatedInvite(message.messageStanza)) {
-        return;
-      }
       final outgoing = from == (_currentUserBareJid ?? '');
       final targetBare = outgoing ? to : from;
       if (replaceId != null && replaceId.isNotEmpty && targetBare.isNotEmpty) {
@@ -6480,36 +6482,6 @@ class XmppService extends ChangeNotifier {
     _lastPingAt = DateTime.now();
     notifyListeners();
     _scheduleReconnect(immediate: true, shortTimeout: shortTimeout);
-  }
-
-  void _handleMucRoomCreatedPresence(PresenceStanza stanza) {
-    final from = stanza.fromJid;
-    if (from == null || from.resource == null || from.resource!.isEmpty) {
-      return;
-    }
-    final x = stanza.children.firstWhere(
-      (child) =>
-          child.name == 'x' &&
-          child.getAttribute('xmlns')?.value == 'http://jabber.org/protocol/muc#user',
-      orElse: () => XmppElement(),
-    );
-    if (x.name == null || x.name!.isEmpty) {
-      return;
-    }
-    final statusCodes = x.children
-        .where((child) => child.name == 'status')
-        .map((child) => child.getAttribute('code')?.value ?? '')
-        .where((code) => code.isNotEmpty)
-        .toSet();
-    if (!statusCodes.contains('201') || !statusCodes.contains('110')) {
-      return;
-    }
-    final roomJid = from.userAtDomain;
-    if (roomJid.isEmpty || _mucDefaultConfigSent.contains(roomJid)) {
-      return;
-    }
-    _mucDefaultConfigSent.add(roomJid);
-    _sendMucDefaultConfig(roomJid);
   }
 
   void _sendMucDefaultConfig(String roomJid) {

@@ -1,7 +1,6 @@
 import 'package:xmpp_stone/xmpp_stone.dart';
 
 const String mucDirectInviteNamespace = 'jabber:x:conference';
-const String _mucUserNamespace = 'http://jabber.org/protocol/muc#user';
 
 class MucDirectInvite {
   MucDirectInvite({
@@ -36,23 +35,6 @@ MucDirectInvite? parseMucDirectInvite(MessageStanza stanza) {
     );
   }
   return null;
-}
-
-bool isMucMediatedInvite(MessageStanza stanza) {
-  for (final child in stanza.children) {
-    if (child.name != 'x') {
-      continue;
-    }
-    if (child.getAttribute('xmlns')?.value != _mucUserNamespace) {
-      continue;
-    }
-    final invite = child.getChild('invite');
-    if (invite == null) {
-      continue;
-    }
-    return true;
-  }
-  return false;
 }
 
 String? _trimmed(String? value) {

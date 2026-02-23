@@ -22,7 +22,13 @@ class ChatManager {
         .where((abstractStanza) => abstractStanza is MessageStanza)
         .map((stanza) => stanza as MessageStanza?)
         .listen((stanza) {
-      var message = Message.fromStanza(stanza!);
+      if (stanza == null) {
+        return;
+      }
+      if (_isMucMediatedInvite(stanza)) {
+        return;
+      }
+      var message = Message.fromStanza(stanza);
       if (message.to == null || message.from == null) {
         return;
       }
@@ -61,4 +67,19 @@ class ChatManager {
     }
     return chat;
   }
+}
+
+bool _isMucMediatedInvite(MessageStanza stanza) {
+  for (final child in stanza.children) {
+    if (child.name != 'x') {
+      continue;
+    }
+    if (child.getAttribute('xmlns')?.value != 'http://jabber.org/protocol/muc#user') {
+      continue;
+    }
+    if (child.getChild('invite') != null) {
+      return true;
+    }
+  }
+  return false;
 }
