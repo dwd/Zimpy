@@ -1083,6 +1083,24 @@ class _WimsyHomeState extends State<WimsyHome> {
                     icon: const Icon(Icons.person_add),
                     tooltip: 'Invite to room',
                   ),
+                if (isBookmark && (roomEntry?.joined ?? false))
+                  IconButton(
+                    onPressed: () {
+                      if (service.mujiSessionFor(activeChat) == null) {
+                        service.joinMujiRoom(activeChat);
+                      } else {
+                        service.leaveMujiRoom(activeChat);
+                      }
+                    },
+                    icon: Icon(
+                      service.mujiSessionFor(activeChat) == null
+                          ? Icons.group
+                          : Icons.call_end,
+                    ),
+                    tooltip: service.mujiSessionFor(activeChat) == null
+                        ? 'Start group call'
+                        : 'Leave group call',
+                  ),
                 if (activeChat != null && !isBookmark) ...[
                   IconButton(
                     onPressed: service.callSessionFor(activeChat) != null
