@@ -24,4 +24,17 @@ void main() {
     final parsed = parseMucDirectInvite(stanza);
     expect(parsed, isNull);
   });
+
+  test('isMucMediatedInvite detects mediated invite', () {
+    final stanza = MessageStanza('m3', MessageStanzaType.NORMAL);
+    stanza.fromJid = Jid.fromFullJid('room@example.com');
+    final x = XmppElement()..name = 'x';
+    x.addAttribute(XmppAttribute('xmlns', 'http://jabber.org/protocol/muc#user'));
+    final invite = XmppElement()..name = 'invite';
+    invite.addAttribute(XmppAttribute('from', 'juliet@example.com'));
+    x.addChild(invite);
+    stanza.addChild(x);
+
+    expect(isMucMediatedInvite(stanza), isTrue);
+  });
 }

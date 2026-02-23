@@ -4524,6 +4524,9 @@ class XmppService extends ChangeNotifier {
       final replaceId = _extractReplaceIdFromStanza(message.messageStanza);
       final reaction = _extractReactionUpdate(message.messageStanza);
       final invite = parseMucDirectInvite(message.messageStanza);
+      if (invite == null && isMucMediatedInvite(message.messageStanza)) {
+        return;
+      }
       final outgoing = from == (_currentUserBareJid ?? '');
       final targetBare = outgoing ? to : from;
       if (replaceId != null && replaceId.isNotEmpty && targetBare.isNotEmpty) {
