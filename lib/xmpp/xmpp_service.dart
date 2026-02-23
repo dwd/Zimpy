@@ -2005,6 +2005,7 @@ class XmppService extends ChangeNotifier {
     if (rtpContents.isNotEmpty) {
       if (_callSessions.containsKey(event.sid)) {
         _storeRemoteCallContents(event.sid, rtpContents);
+        _updateIncomingCallMedia(event.sid, rtpContents);
         if (_jmiAutoAcceptBySid.remove(event.sid)) {
           final session = _callSessions[event.sid];
           if (session != null) {
@@ -2138,6 +2139,29 @@ class XmppService extends ChangeNotifier {
       duration: _incomingCallTimeout,
       incoming: true,
     );
+    notifyListeners();
+  }
+
+  void _updateIncomingCallMedia(String sid, List<JingleContent> contents) {
+    final session = _callSessions[sid];
+    if (session == null || session.direction != CallDirection.incoming) {
+      return;
+    }
+    final hasVideo = contents.any((content) =>
+        (content.rtpDescription?.media.toLowerCase() ?? '') == 'video');
+    final nextVideo = hasVideo;
+    if (session.video != nextVideo) {
+      _callSessions[sid] = CallSession(
+        sid: session.sid,
+        peerBareJid: session.peerBareJid,
+        direction: session.direction,
+        video: nextVideo,
+        state: session.state,
+      );
+    }
+    _callMediaKindBySid[sid] = nextVideo ? CallMediaKind.video : CallMediaKind.audio;
+    _callVideoEnabledBySid[sid] = nextVideo;
+    _callContentNamesBySid[sid] = _contentNamesFor(contents);
     notifyListeners();
   }
 
