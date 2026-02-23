@@ -1130,6 +1130,14 @@ class _WimsyHomeState extends State<WimsyHome> {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: _buildMujiStatusBar(service, activeChat),
             ),
+          if (activeChat != null &&
+              isBookmark &&
+              (roomEntry?.joined ?? false) &&
+              service.mujiSessionFor(activeChat) == null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _buildMujiJoinBar(service, activeChat),
+            ),
           if (activeChat != null && isBookmark && service.mujiSessionFor(activeChat) != null)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -1996,6 +2004,52 @@ class _WimsyHomeState extends State<WimsyHome> {
             TextButton(
               onPressed: () => service.leaveMujiRoom(roomJid),
               child: const Text('Leave'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMujiJoinBar(XmppService service, String roomJid) {
+    final theme = Theme.of(context);
+    return Card(
+      elevation: 0,
+      color: theme.colorScheme.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            Icon(
+              Icons.groups,
+              color: theme.colorScheme.primary,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Muji group call',
+                    style: theme.textTheme.labelLarge,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Start or join a group call in this room.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            FilledButton(
+              onPressed: () => service.joinMujiRoom(roomJid),
+              child: const Text('Join'),
             ),
           ],
         ),
