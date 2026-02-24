@@ -2905,7 +2905,9 @@ class XmppService extends ChangeNotifier {
     }
     final remoteTransports =
         _callRemoteTransportsBySid[event.sid] ?? <String, JingleIceTransport>{};
-    remoteTransports[contentName] = transport;
+    final existing = remoteTransports[contentName];
+    remoteTransports[contentName] =
+        existing == null ? transport : mergeIceTransports(existing, transport);
     _callRemoteTransportsBySid[event.sid] = remoteTransports;
     final pc = _callPeerConnections[event.sid];
     if (pc == null) {
@@ -2916,6 +2918,42 @@ class XmppService extends ChangeNotifier {
       final candidateLine = _buildCandidateLine(candidate);
       pc.addCandidate(RTCIceCandidate(candidateLine, mid, null));
     }
+  }
+
+  @visibleForTesting
+  static JingleIceTransport mergeIceTransports(
+    JingleIceTransport existing,
+    JingleIceTransport update,
+  ) {
+    final mergedCandidates = <JingleIceCandidate>[];
+    final candidateKeys = <String>{};
+    void addCandidate(JingleIceCandidate candidate) {
+      final key = '${candidate.foundation}|${candidate.component}|'
+          '${candidate.protocol}|${candidate.priority}|${candidate.ip}|'
+          '${candidate.port}|${candidate.type}|${candidate.generation ?? ''}';
+      if (candidateKeys.add(key)) {
+        mergedCandidates.add(candidate);
+      }
+    }
+
+    for (final candidate in update.candidates) {
+      addCandidate(candidate);
+    }
+    for (final candidate in existing.candidates) {
+      addCandidate(candidate);
+    }
+
+    final ufrag = update.ufrag.isNotEmpty ? update.ufrag : existing.ufrag;
+    final password =
+        update.password.isNotEmpty ? update.password : existing.password;
+    final fingerprint = update.fingerprint ?? existing.fingerprint;
+
+    return JingleIceTransport(
+      ufrag: ufrag,
+      password: password,
+      candidates: mergedCandidates,
+      fingerprint: fingerprint,
+    );
   }
 
   String _buildCandidateLine(JingleIceCandidate candidate) {
