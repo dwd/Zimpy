@@ -157,4 +157,20 @@ void main() {
     expect(intent.body, 'hello');
     expect(intent.messageId, 'm6');
   });
+
+  test('buildMessageIntents returns no-action intent for no body', () {
+    final service = XmppService();
+    final stanza = _chatStanza(
+      id: 'm7',
+      from: 'alice@example.com/phone',
+      to: 'bob@example.com/desktop',
+    );
+
+    final intents = service.buildMessageIntentsForTesting(stanza);
+
+    expect(intents.length, 1);
+    expect(intents.first, isA<UnhandledMessageIntent>());
+    final intent = intents.first as UnhandledMessageIntent;
+    expect(intent.reason, 'empty-body');
+  });
 }
