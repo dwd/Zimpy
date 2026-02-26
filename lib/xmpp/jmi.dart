@@ -16,21 +16,23 @@ enum JmiAction {
 class JmiPropose {
   const JmiPropose({
     required this.sid,
-    required this.description,
+    required this.descriptions,
   });
 
   final String sid;
-  final JingleRtpDescription description;
+  final List<JingleRtpDescription> descriptions;
 }
 
 XmppElement buildJmiProposeElement({
   required String sid,
-  required JingleRtpDescription description,
+  required List<JingleRtpDescription> descriptions,
 }) {
   final propose = XmppElement()..name = 'propose';
   propose.addAttribute(XmppAttribute('xmlns', jmiNamespace));
   propose.addAttribute(XmppAttribute('id', sid));
-  propose.addChild(_buildRtpDescription(description));
+  for (final description in descriptions) {
+    propose.addChild(_buildRtpDescription(description));
+  }
   return propose;
 }
 
@@ -94,11 +96,20 @@ JmiPropose? parseJmiPropose(XmppElement stanza) {
     if (sid.isEmpty) {
       return null;
     }
-    final description = _parseRtpDescription(child.getChild('description'));
-    if (description == null) {
+    final descriptions = <JingleRtpDescription>[];
+    for (final entry in child.children) {
+      if (entry.name != 'description') {
+        continue;
+      }
+      final parsed = _parseRtpDescription(entry);
+      if (parsed != null) {
+        descriptions.add(parsed);
+      }
+    }
+    if (descriptions.isEmpty) {
       return null;
     }
-    return JmiPropose(sid: sid, description: description);
+    return JmiPropose(sid: sid, descriptions: descriptions);
   }
   return null;
 }

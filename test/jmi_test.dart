@@ -4,7 +4,7 @@ import 'package:xmpp_stone/xmpp_stone.dart';
 
 void main() {
   test('build and parse JMI propose', () {
-    final description = const JingleRtpDescription(
+    final audio = const JingleRtpDescription(
       media: 'audio',
       payloadTypes: [
         JingleRtpPayloadType(
@@ -16,8 +16,19 @@ void main() {
         ),
       ],
     );
+    final video = const JingleRtpDescription(
+      media: 'video',
+      payloadTypes: [
+        JingleRtpPayloadType(
+          id: 96,
+          name: 'VP8',
+          clockRate: 90000,
+        ),
+      ],
+    );
 
-    final propose = buildJmiProposeElement(sid: 'sid1', description: description);
+    final propose =
+        buildJmiProposeElement(sid: 'sid1', descriptions: [audio, video]);
     final message = XmppElement()..name = 'message';
     message.addChild(propose);
 
@@ -25,7 +36,15 @@ void main() {
 
     expect(parsed, isNotNull);
     expect(parsed!.sid, 'sid1');
-    expect(parsed.description.payloadTypes.first.parameters['minptime'], '10');
+    expect(parsed.descriptions, hasLength(2));
+    expect(
+      parsed.descriptions
+          .firstWhere((desc) => desc.media == 'audio')
+          .payloadTypes
+          .first
+          .parameters['minptime'],
+      '10',
+    );
   });
 
   test('parseJmiAction detects proceed', () {

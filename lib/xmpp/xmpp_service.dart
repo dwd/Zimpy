@@ -210,7 +210,7 @@ class XmppService extends ChangeNotifier {
   final Map<String, Jid> _jmiProceedTargetBySid = {};
   final Set<String> _jmiIncomingPending = {};
   final Set<String> _jmiAutoAcceptBySid = {};
-  final Map<String, String> _jmiProposedMediaBySid = {};
+  final Map<String, Set<String>> _jmiProposedMediaBySid = {};
   final Map<String, String> _jingleInitiatedTargets = {};
   List<Map<String, dynamic>> _iceServers = const [];
   bool _speakerphoneOn = false;
@@ -2342,15 +2342,6 @@ class XmppService extends ChangeNotifier {
     return contents;
   }
 
-  JingleSdpMapping _selectPrimaryMapping(List<JingleSdpMapping> mappings) {
-    for (final mapping in mappings) {
-      if (mapping.description.media.toLowerCase() == 'audio') {
-        return mapping;
-      }
-    }
-    return mappings.first;
-  }
-
   Future<String?> startCall({
     required String bareJid,
     bool video = false,
@@ -2419,10 +2410,13 @@ class XmppService extends ChangeNotifier {
     if (_isMujiParticipantJid(bareJid)) {
       unawaited(_sendPendingJingleInitiate(sid, Jid.fromFullJid(bareJid)));
     } else {
-      final proposeMapping = _selectPrimaryMapping(mappings);
       final target = _bareJid(bareJid);
-      _jmiProposedMediaBySid[sid] = proposeMapping.description.media;
-      _sendJmiPropose(target, sid, proposeMapping.description);
+      final descriptions = _buildJmiProposeDescriptions(mappings);
+      if (descriptions.isNotEmpty) {
+        _jmiProposedMediaBySid[sid] =
+            descriptions.map((desc) => desc.media).toSet();
+      }
+      _sendJmiPropose(target, sid, descriptions);
       _startJmiFallbackTimer(sid, target);
     }
     return null;
@@ -2864,11 +2858,19 @@ class XmppService extends ChangeNotifier {
         }
         _jmiProceedTargetBySid[propose.sid] = fromJid;
         _jmiIncomingPending.add(propose.sid);
-        final content = JingleContent(
-          name: propose.description.media,
-          creator: 'initiator',
-          rtpDescription: propose.description,
-        );
+        final contents = propose.descriptions
+            .map(
+              (description) => JingleContent(
+                name: description.media,
+                creator: 'initiator',
+                rtpDescription: description,
+              ),
+            )
+            .toList(growable: false);
+        if (contents.isEmpty) {
+          return;
+        }
+        final content = contents.first;
         _handleIncomingCall(
           JingleSessionEvent(
             action: JingleAction.sessionInitiate,
@@ -2877,9 +2879,9 @@ class XmppService extends ChangeNotifier {
             to: _connection?.fullJid ?? fromJid,
             stanza: IqStanza(propose.sid, IqStanzaType.SET),
             content: content,
-            contents: [content],
+            contents: contents,
           ),
-          [content],
+          contents,
         );
         _sendJmiRinging(fromJid, propose.sid);
         return;
@@ -2921,9 +2923,19 @@ class XmppService extends ChangeNotifier {
     _connection?.writeStanza(message);
   }
 
-  void _sendJmiPropose(String bareJid, String sid, JingleRtpDescription description) {
+  void _sendJmiPropose(
+    String bareJid,
+    String sid,
+    List<JingleRtpDescription> descriptions,
+  ) {
     final to = Jid.fromFullJid(bareJid);
-    _sendJmiMessage(to, buildJmiProposeElement(sid: sid, description: description));
+    if (descriptions.isEmpty) {
+      return;
+    }
+    _sendJmiMessage(
+      to,
+      buildJmiProposeElement(sid: sid, descriptions: descriptions),
+    );
   }
 
   void _sendJmiProceed(Jid to, String sid) {
@@ -2940,6 +2952,36 @@ class XmppService extends ChangeNotifier {
 
   void _sendJmiRetract(Jid to, String sid) {
     _sendJmiMessage(to, buildJmiRetractElement(sid: sid));
+  }
+
+  List<JingleRtpDescription> _buildJmiProposeDescriptions(
+    List<JingleSdpMapping> mappings,
+  ) {
+    final byMedia = <String, JingleRtpDescription>{};
+    for (final mapping in mappings) {
+      final media = mapping.description.media;
+      if (media.isEmpty || byMedia.containsKey(media)) {
+        continue;
+      }
+      byMedia[media] = mapping.description;
+    }
+    if (byMedia.isEmpty) {
+      return const [];
+    }
+    final ordered = <JingleRtpDescription>[];
+    if (byMedia.containsKey('audio')) {
+      ordered.add(byMedia['audio']!);
+    }
+    if (byMedia.containsKey('video')) {
+      ordered.add(byMedia['video']!);
+    }
+    for (final entry in byMedia.entries) {
+      if (entry.key == 'audio' || entry.key == 'video') {
+        continue;
+      }
+      ordered.add(entry.value);
+    }
+    return ordered;
   }
 
   void _startJmiFallbackTimer(String sid, String bareJid) {
@@ -2973,12 +3015,16 @@ class XmppService extends ChangeNotifier {
     final filteredContents = proposedMedia == null
         ? contents
         : contents
-            .where((content) => content.rtpDescription?.media == proposedMedia)
+            .where(
+              (content) => proposedMedia.contains(
+                content.rtpDescription?.media ?? '',
+              ),
+            )
             .toList(growable: false);
     if (proposedMedia != null && filteredContents.isEmpty) {
       Log.w(
         'XmppService',
-        'No matching Jingle contents for proposed media "$proposedMedia".',
+        'No matching Jingle contents for proposed media "${proposedMedia.join(', ')}".',
       );
       _failCallSession(sid, CallState.failed);
       return;
