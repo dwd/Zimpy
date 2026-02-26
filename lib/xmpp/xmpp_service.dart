@@ -210,6 +210,7 @@ class XmppService extends ChangeNotifier {
   final Map<String, Jid> _jmiProceedTargetBySid = {};
   final Set<String> _jmiIncomingPending = {};
   final Set<String> _jmiAutoAcceptBySid = {};
+  final Map<String, String> _jmiProposedMediaBySid = {};
   final Map<String, String> _jingleInitiatedTargets = {};
   List<Map<String, dynamic>> _iceServers = const [];
   bool _speakerphoneOn = false;
@@ -2420,6 +2421,7 @@ class XmppService extends ChangeNotifier {
     } else {
       final proposeMapping = _selectPrimaryMapping(mappings);
       final target = _bareJid(bareJid);
+      _jmiProposedMediaBySid[sid] = proposeMapping.description.media;
       _sendJmiPropose(target, sid, proposeMapping.description);
       _startJmiFallbackTimer(sid, target);
     }
@@ -2821,6 +2823,7 @@ class XmppService extends ChangeNotifier {
     _jmiProceedTargetBySid.remove(session.sid);
     _jmiIncomingPending.remove(session.sid);
     _jmiAutoAcceptBySid.remove(session.sid);
+    _jmiProposedMediaBySid.remove(session.sid);
     _jingleInitiatedTargets.remove(session.sid);
     final pc = _callPeerConnections.remove(session.sid);
     pc?.close();
@@ -2966,7 +2969,21 @@ class XmppService extends ChangeNotifier {
       return;
     }
     final contents = _buildCallContents(descriptions, transports);
-    if (contents.isEmpty) {
+    final proposedMedia = _jmiProposedMediaBySid[sid];
+    final filteredContents = proposedMedia == null
+        ? contents
+        : contents
+            .where((content) => content.rtpDescription?.media == proposedMedia)
+            .toList(growable: false);
+    if (proposedMedia != null && filteredContents.isEmpty) {
+      Log.w(
+        'XmppService',
+        'No matching Jingle contents for proposed media "$proposedMedia".',
+      );
+      _failCallSession(sid, CallState.failed);
+      return;
+    }
+    if (filteredContents.isEmpty) {
       return;
     }
     final toJid = _callPeerJidForSid(sid, to.userAtDomain);
@@ -2977,7 +2994,7 @@ class XmppService extends ChangeNotifier {
     final iq = jingle.buildRtpSessionInitiateMulti(
       to: toJid,
       sid: sid,
-      contents: contents,
+      contents: filteredContents,
     );
     _jingleInitiatedTargets[sid] = toJid.fullJid ?? toJid.userAtDomain;
     final result = await _sendIqAndAwait(iq);
