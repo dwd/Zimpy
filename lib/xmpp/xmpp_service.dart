@@ -1784,7 +1784,7 @@ class XmppService extends ChangeNotifier {
     if (isRoom) {
       _applyRoomReactionUpdate(_bareJid(bareJid), sender, targetId, [trimmed]);
     } else {
-      _applyReactionUpdate(_bareJid(bareJid), sender, _ReactionUpdate(targetId, [trimmed]));
+      _applyReactionUpdate(_bareJid(bareJid), sender, ReactionUpdate(targetId, [trimmed]));
     }
   }
 
@@ -3216,24 +3216,36 @@ class XmppService extends ChangeNotifier {
     if (stanza.type != MessageStanzaType.CHAT) {
       return;
     }
+    final intents = _buildMessageIntents(stanza);
+    _applyMessageIntents(stanza, intents);
+  }
+
+  List<MessageIntent> _buildMessageIntents(MessageStanza stanza) {
     final fromBare = stanza.fromJid?.userAtDomain ?? '';
     if (fromBare.isEmpty) {
-      return;
+      return const [];
     }
     final jmiAction = parseJmiAction(stanza);
     if (jmiAction != null) {
-      _handleJmiMessage(stanza, jmiAction);
-      return;
+      return [
+        HandleJmiIntent(action: jmiAction),
+      ];
     }
     final receiptId = _extractReceiptsId(stanza);
     if (receiptId != null) {
-      _applyReceipt(fromBare, receiptId);
-      return;
+      return [
+        ApplyReceiptIntent(
+          scopedId: MessageScopedId(scopeJid: fromBare, id: receiptId),
+        ),
+      ];
     }
     final displayedId = _extractMarkerId(stanza, 'displayed');
     if (displayedId != null) {
-      _applyDisplayed(fromBare, displayedId);
-      return;
+      return [
+        ApplyDisplayedIntent(
+          scopedId: MessageScopedId(scopeJid: fromBare, id: displayedId),
+        ),
+      ];
     }
     final reaction = _extractReactionUpdate(stanza);
     if (reaction != null) {
@@ -3241,35 +3253,87 @@ class XmppService extends ChangeNotifier {
         fromBare,
         stanza.toJid?.userAtDomain ?? '',
       );
-      if (targetBare.isNotEmpty) {
-        _applyReactionUpdate(targetBare, fromBare, reaction);
+      if (targetBare.isEmpty) {
+        return const [];
       }
-      return;
+      return [
+        ApplyReactionIntent(
+          targetBareJid: targetBare,
+          senderBareJid: fromBare,
+          update: reaction,
+        ),
+      ];
     }
     final body = stanza.body ?? '';
     final oobInfo = _extractOobInfoFromStanza(stanza);
     final oobUrl = oobInfo?.url;
     if (body.trim().isEmpty && (oobUrl == null || oobUrl.isEmpty)) {
-      return;
+      return const [];
     }
     if (_isArchivedStanza(stanza)) {
-      return;
+      return const [];
     }
     if (_currentUserBareJid != null && _bareJid(fromBare) == _currentUserBareJid) {
-      return;
+      return const [];
     }
     final messageId = stanza.id;
     if (messageId == null || messageId.isEmpty) {
-      return;
+      return const [];
     }
+    final intents = <MessageIntent>[];
     if (_hasReceiptRequest(stanza)) {
-      _sendReceipt(fromBare, messageId);
+      intents.add(
+        SendReceiptIntent(
+          toBareJid: fromBare,
+          scopedId: MessageScopedId(scopeJid: fromBare, id: messageId),
+        ),
+      );
     }
     if (_hasMarkable(stanza)) {
-      _sendMarker(fromBare, messageId, 'received');
+      intents.add(
+        SendMarkerIntent(
+          toBareJid: fromBare,
+          scopedId: MessageScopedId(scopeJid: fromBare, id: messageId),
+          name: 'received',
+        ),
+      );
       if (_activeChatBareJid != null &&
           _bareJid(_activeChatBareJid!) == _bareJid(fromBare)) {
-        _sendMarker(fromBare, messageId, 'displayed');
+        intents.add(
+          SendMarkerIntent(
+            toBareJid: fromBare,
+            scopedId: MessageScopedId(scopeJid: fromBare, id: messageId),
+            name: 'displayed',
+          ),
+        );
+      }
+    }
+    return intents;
+  }
+
+  @visibleForTesting
+  List<MessageIntent> buildMessageIntentsForTesting(MessageStanza stanza) {
+    return _buildMessageIntents(stanza);
+  }
+
+  void _applyMessageIntents(MessageStanza stanza, List<MessageIntent> intents) {
+    for (final intent in intents) {
+      if (intent is HandleJmiIntent) {
+        _handleJmiMessage(stanza, intent.action);
+      } else if (intent is ApplyReceiptIntent) {
+        _applyReceipt(intent.scopedId.scopeJid, intent.scopedId.id);
+      } else if (intent is ApplyDisplayedIntent) {
+        _applyDisplayed(intent.scopedId.scopeJid, intent.scopedId.id);
+      } else if (intent is ApplyReactionIntent) {
+        _applyReactionUpdate(
+          intent.targetBareJid,
+          intent.senderBareJid,
+          intent.update,
+        );
+      } else if (intent is SendReceiptIntent) {
+        _sendReceipt(intent.toBareJid, intent.scopedId.id);
+      } else if (intent is SendMarkerIntent) {
+        _sendMarker(intent.toBareJid, intent.scopedId.id, intent.name);
       }
     }
   }
@@ -3546,7 +3610,7 @@ class XmppService extends ChangeNotifier {
     return null;
   }
 
-  _ReactionUpdate? _extractReactionUpdate(XmppElement stanza) {
+  ReactionUpdate? _extractReactionUpdate(XmppElement stanza) {
     final candidates = <XmppElement>[stanza];
     for (final child in stanza.children) {
       if (child.name != 'result' && child.name != 'sent' && child.name != 'received') {
@@ -3578,7 +3642,7 @@ class XmppService extends ChangeNotifier {
             .map((reaction) => reaction.textValue?.trim() ?? '')
             .where((value) => value.isNotEmpty)
             .toList();
-        return _ReactionUpdate(targetId, reactions);
+        return ReactionUpdate(targetId, reactions);
       }
     }
     return null;
@@ -3624,7 +3688,7 @@ class XmppService extends ChangeNotifier {
     return _bareJid(fromBare);
   }
 
-  void _applyReactionUpdate(String bareJid, String sender, _ReactionUpdate update) {
+  void _applyReactionUpdate(String bareJid, String sender, ReactionUpdate update) {
     final normalized = _bareJid(bareJid);
     final list = _messages[normalized];
     if (list == null || list.isEmpty) {
@@ -3790,7 +3854,7 @@ class XmppService extends ChangeNotifier {
     final changed = _updateReactionsInList(
       list,
       sender,
-      _ReactionUpdate(targetId, reactions),
+      ReactionUpdate(targetId, reactions),
     );
     if (!changed) {
       return;
@@ -3802,7 +3866,7 @@ class XmppService extends ChangeNotifier {
   bool _updateReactionsInList(
     List<ChatMessage> list,
     String sender,
-    _ReactionUpdate update,
+    ReactionUpdate update,
   ) {
     if (sender.isEmpty || update.targetId.isEmpty) {
       return false;
@@ -6809,11 +6873,74 @@ class _FileTransferSession {
   IOSink? sink;
 }
 
-class _ReactionUpdate {
-  _ReactionUpdate(this.targetId, this.reactions);
+class ReactionUpdate {
+  ReactionUpdate(this.targetId, this.reactions);
 
   final String targetId;
   final List<String> reactions;
+}
+
+class MessageScopedId {
+  const MessageScopedId({required this.scopeJid, required this.id});
+
+  final String scopeJid;
+  final String id;
+}
+
+abstract class MessageIntent {
+  const MessageIntent();
+}
+
+class HandleJmiIntent extends MessageIntent {
+  const HandleJmiIntent({required this.action});
+
+  final JmiAction action;
+}
+
+class ApplyReceiptIntent extends MessageIntent {
+  const ApplyReceiptIntent({required this.scopedId});
+
+  final MessageScopedId scopedId;
+}
+
+class ApplyDisplayedIntent extends MessageIntent {
+  const ApplyDisplayedIntent({required this.scopedId});
+
+  final MessageScopedId scopedId;
+}
+
+class ApplyReactionIntent extends MessageIntent {
+  const ApplyReactionIntent({
+    required this.targetBareJid,
+    required this.senderBareJid,
+    required this.update,
+  });
+
+  final String targetBareJid;
+  final String senderBareJid;
+  final ReactionUpdate update;
+}
+
+class SendReceiptIntent extends MessageIntent {
+  const SendReceiptIntent({
+    required this.toBareJid,
+    required this.scopedId,
+  });
+
+  final String toBareJid;
+  final MessageScopedId scopedId;
+}
+
+class SendMarkerIntent extends MessageIntent {
+  const SendMarkerIntent({
+    required this.toBareJid,
+    required this.scopedId,
+    required this.name,
+  });
+
+  final String toBareJid;
+  final MessageScopedId scopedId;
+  final String name;
 }
 
 class _OobInfo {
