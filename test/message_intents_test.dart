@@ -58,15 +58,18 @@ void main() {
 
     final intents = service.buildMessageIntentsForTesting(stanza);
 
-    expect(intents.length, 2);
+    expect(intents.length, 3);
     expect(intents[0], isA<SendReceiptIntent>());
     expect(intents[1], isA<SendMarkerIntent>());
+    expect(intents[2], isA<AddMessageIntent>());
     final receipt = intents[0] as SendReceiptIntent;
     final marker = intents[1] as SendMarkerIntent;
+    final add = intents[2] as AddMessageIntent;
     expect(receipt.scopedId.scopeJid, 'alice@example.com');
     expect(receipt.scopedId.id, 'm2');
     expect(marker.name, 'received');
     expect(marker.scopedId.id, 'm2');
+    expect(add.body, 'hi');
   });
 
   test('buildMessageIntents returns JMI handle intent', () {
@@ -134,7 +137,7 @@ void main() {
     expect(intent.update.reactions, ['👍']);
   });
 
-  test('buildMessageIntents reports no-action as unhandled', () {
+  test('buildMessageIntents returns add message intent for body', () {
     final service = XmppService();
     final stanza = _chatStanza(
       id: 'm6',
@@ -146,8 +149,12 @@ void main() {
     final intents = service.buildMessageIntentsForTesting(stanza);
 
     expect(intents.length, 1);
-    expect(intents.first, isA<UnhandledMessageIntent>());
-    final intent = intents.first as UnhandledMessageIntent;
-    expect(intent.reason, 'no-action');
+    expect(intents.first, isA<AddMessageIntent>());
+    final intent = intents.first as AddMessageIntent;
+    expect(intent.bareJid, 'alice@example.com');
+    expect(intent.from, 'alice@example.com');
+    expect(intent.to, 'bob@example.com');
+    expect(intent.body, 'hello');
+    expect(intent.messageId, 'm6');
   });
 }

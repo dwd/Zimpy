@@ -3320,6 +3320,19 @@ class XmppService extends ChangeNotifier {
         );
       }
     }
+    intents.add(
+      AddMessageIntent(
+        bareJid: fromBare,
+        from: fromBare,
+        to: stanza.toJid?.userAtDomain ?? '',
+        body: body,
+        timestamp: DateTime.now(),
+        messageId: messageId,
+        rawXml: _serializeStanza(stanza),
+        oobUrl: oobUrl,
+        oobDescription: oobInfo?.description,
+      ),
+    );
     if (intents.isEmpty) {
       return const [
         UnhandledMessageIntent(reason: 'no-action'),
@@ -3351,6 +3364,19 @@ class XmppService extends ChangeNotifier {
         _sendReceipt(intent.toBareJid, intent.scopedId.id);
       } else if (intent is SendMarkerIntent) {
         _sendMarker(intent.toBareJid, intent.scopedId.id, intent.name);
+      } else if (intent is AddMessageIntent) {
+        _addMessage(
+          bareJid: intent.bareJid,
+          from: intent.from,
+          to: intent.to,
+          body: intent.body,
+          rawXml: intent.rawXml,
+          outgoing: false,
+          timestamp: intent.timestamp,
+          messageId: intent.messageId,
+          oobUrl: intent.oobUrl,
+          oobDescription: intent.oobDescription,
+        );
       } else if (intent is UnhandledMessageIntent) {
         _logUnhandledMessage(stanza, intent);
       }
@@ -6973,6 +6999,30 @@ class SendMarkerIntent extends MessageIntent {
   final String toBareJid;
   final MessageScopedId scopedId;
   final String name;
+}
+
+class AddMessageIntent extends MessageIntent {
+  const AddMessageIntent({
+    required this.bareJid,
+    required this.from,
+    required this.to,
+    required this.body,
+    required this.timestamp,
+    required this.messageId,
+    required this.rawXml,
+    this.oobUrl,
+    this.oobDescription,
+  });
+
+  final String bareJid;
+  final String from;
+  final String to;
+  final String body;
+  final DateTime timestamp;
+  final String messageId;
+  final String rawXml;
+  final String? oobUrl;
+  final String? oobDescription;
 }
 
 class UnhandledMessageIntent extends MessageIntent {
