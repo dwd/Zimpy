@@ -27,11 +27,19 @@ class SessionInitiationNegotiator extends Negotiator {
 
   @override
   void negotiate(List<Nonza> nonzas) {
-    if (match(nonzas).isNotEmpty) {
-      state = NegotiatorState.NEGOTIATING;
-      subscription = _connection.inStanzasStream.listen(parseStanza);
-      sendSessionInitiationStanza();
+    final matching = match(nonzas);
+    if (matching.isEmpty) {
+      return;
     }
+    final sessionNonza = matching.first;
+    if (sessionNonza.getChild('optional') != null) {
+      _connection.sessionReady();
+      state = NegotiatorState.DONE;
+      return;
+    }
+    state = NegotiatorState.NEGOTIATING;
+    subscription = _connection.inStanzasStream.listen(parseStanza);
+    sendSessionInitiationStanza();
   }
 
   void parseStanza(AbstractStanza? stanza) {
