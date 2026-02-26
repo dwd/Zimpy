@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xmpp_stone/xmpp_stone.dart';
 import 'package:wimsy/xmpp/xmpp_service.dart';
+import 'package:wimsy/xmpp/jmi.dart';
 
 MessageStanza _chatStanza({
   required String id,
@@ -66,5 +67,87 @@ void main() {
     expect(receipt.scopedId.id, 'm2');
     expect(marker.name, 'received');
     expect(marker.scopedId.id, 'm2');
+  });
+
+  test('buildMessageIntents returns JMI handle intent', () {
+    final service = XmppService();
+    final stanza = _chatStanza(
+      id: 'm3',
+      from: 'alice@example.com/phone',
+      to: 'bob@example.com/desktop',
+    );
+    stanza.addChild(buildJmiProceedElement(sid: 'sid1'));
+
+    final intents = service.buildMessageIntentsForTesting(stanza);
+
+    expect(intents.length, 1);
+    expect(intents.first, isA<HandleJmiIntent>());
+    final intent = intents.first as HandleJmiIntent;
+    expect(intent.action, JmiAction.proceed);
+  });
+
+  test('buildMessageIntents applies displayed marker intent', () {
+    final service = XmppService();
+    final stanza = _chatStanza(
+      id: 'm4',
+      from: 'alice@example.com/phone',
+      to: 'bob@example.com/desktop',
+    );
+    final displayed = XmppElement()..name = 'displayed';
+    displayed.addAttribute(
+        XmppAttribute('xmlns', 'urn:xmpp:chat-markers:0'));
+    displayed.addAttribute(XmppAttribute('id', 'd1'));
+    stanza.addChild(displayed);
+
+    final intents = service.buildMessageIntentsForTesting(stanza);
+
+    expect(intents.length, 1);
+    expect(intents.first, isA<ApplyDisplayedIntent>());
+    final intent = intents.first as ApplyDisplayedIntent;
+    expect(intent.scopedId.scopeJid, 'alice@example.com');
+    expect(intent.scopedId.id, 'd1');
+  });
+
+  test('buildMessageIntents applies reaction intent', () {
+    final service = XmppService();
+    final stanza = _chatStanza(
+      id: 'm5',
+      from: 'alice@example.com/phone',
+      to: 'bob@example.com/desktop',
+    );
+    final reactions = XmppElement()..name = 'reactions';
+    reactions.addAttribute(XmppAttribute('xmlns', 'urn:xmpp:reactions:0'));
+    reactions.addAttribute(XmppAttribute('id', 'target1'));
+    final reaction = XmppElement()..name = 'reaction';
+    reaction.textValue = '👍';
+    reactions.addChild(reaction);
+    stanza.addChild(reactions);
+
+    final intents = service.buildMessageIntentsForTesting(stanza);
+
+    expect(intents.length, 1);
+    expect(intents.first, isA<ApplyReactionIntent>());
+    final intent = intents.first as ApplyReactionIntent;
+    expect(intent.targetBareJid, 'alice@example.com');
+    expect(intent.senderBareJid, 'alice@example.com');
+    expect(intent.update.targetId, 'target1');
+    expect(intent.update.reactions, ['👍']);
+  });
+
+  test('buildMessageIntents reports no-action as unhandled', () {
+    final service = XmppService();
+    final stanza = _chatStanza(
+      id: 'm6',
+      from: 'alice@example.com/phone',
+      to: 'bob@example.com/desktop',
+      body: 'hello',
+    );
+
+    final intents = service.buildMessageIntentsForTesting(stanza);
+
+    expect(intents.length, 1);
+    expect(intents.first, isA<UnhandledMessageIntent>());
+    final intent = intents.first as UnhandledMessageIntent;
+    expect(intent.reason, 'no-action');
   });
 }

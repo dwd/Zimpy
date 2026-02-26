@@ -3223,7 +3223,9 @@ class XmppService extends ChangeNotifier {
   List<MessageIntent> _buildMessageIntents(MessageStanza stanza) {
     final fromBare = stanza.fromJid?.userAtDomain ?? '';
     if (fromBare.isEmpty) {
-      return const [];
+      return const [
+        UnhandledMessageIntent(reason: 'missing-from'),
+      ];
     }
     final jmiAction = parseJmiAction(stanza);
     if (jmiAction != null) {
@@ -3254,7 +3256,9 @@ class XmppService extends ChangeNotifier {
         stanza.toJid?.userAtDomain ?? '',
       );
       if (targetBare.isEmpty) {
-        return const [];
+        return const [
+          UnhandledMessageIntent(reason: 'reaction-target-empty'),
+        ];
       }
       return [
         ApplyReactionIntent(
@@ -3268,17 +3272,25 @@ class XmppService extends ChangeNotifier {
     final oobInfo = _extractOobInfoFromStanza(stanza);
     final oobUrl = oobInfo?.url;
     if (body.trim().isEmpty && (oobUrl == null || oobUrl.isEmpty)) {
-      return const [];
+      return const [
+        UnhandledMessageIntent(reason: 'empty-body'),
+      ];
     }
     if (_isArchivedStanza(stanza)) {
-      return const [];
+      return const [
+        UnhandledMessageIntent(reason: 'archived'),
+      ];
     }
     if (_currentUserBareJid != null && _bareJid(fromBare) == _currentUserBareJid) {
-      return const [];
+      return const [
+        UnhandledMessageIntent(reason: 'self-message'),
+      ];
     }
     final messageId = stanza.id;
     if (messageId == null || messageId.isEmpty) {
-      return const [];
+      return const [
+        UnhandledMessageIntent(reason: 'missing-message-id'),
+      ];
     }
     final intents = <MessageIntent>[];
     if (_hasReceiptRequest(stanza)) {
@@ -3308,6 +3320,11 @@ class XmppService extends ChangeNotifier {
         );
       }
     }
+    if (intents.isEmpty) {
+      return const [
+        UnhandledMessageIntent(reason: 'no-action'),
+      ];
+    }
     return intents;
   }
 
@@ -3334,8 +3351,23 @@ class XmppService extends ChangeNotifier {
         _sendReceipt(intent.toBareJid, intent.scopedId.id);
       } else if (intent is SendMarkerIntent) {
         _sendMarker(intent.toBareJid, intent.scopedId.id, intent.name);
+      } else if (intent is UnhandledMessageIntent) {
+        _logUnhandledMessage(stanza, intent);
       }
     }
+  }
+
+  void _logUnhandledMessage(
+    MessageStanza stanza,
+    UnhandledMessageIntent intent,
+  ) {
+    final from = stanza.fromJid?.fullJid ?? stanza.fromJid?.userAtDomain ?? '';
+    final type = stanza.type.toString();
+    final id = stanza.id ?? '';
+    Log.w(
+      'XmppService',
+      'Unhandled message stanza: reason=${intent.reason} type=$type from=$from id=$id',
+    );
   }
 
   void _handleMediatedInvite(MessageStanza stanza, MucMediatedInvite invite) {
@@ -6941,6 +6973,12 @@ class SendMarkerIntent extends MessageIntent {
   final String toBareJid;
   final MessageScopedId scopedId;
   final String name;
+}
+
+class UnhandledMessageIntent extends MessageIntent {
+  const UnhandledMessageIntent({required this.reason});
+
+  final String reason;
 }
 
 class _OobInfo {
