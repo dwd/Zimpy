@@ -2392,7 +2392,12 @@ class XmppService extends ChangeNotifier {
     }
     final offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    final mappings = mapSdpToJingleContents(sdp: offer.sdp ?? '');
+    var mappings = mapSdpToJingleContents(sdp: offer.sdp ?? '');
+    if (!video) {
+      mappings = mappings
+          .where((mapping) => mapping.description.media == 'audio')
+          .toList(growable: false);
+    }
     if (mappings.isEmpty) {
       return 'Unable to parse local SDP.';
     }
