@@ -3404,6 +3404,7 @@ class XmppService extends ChangeNotifier {
     final transportInfo = transportInfoTransport(transport, parsed);
     final toJid = _callPeerJidForSid(sid, peerBareJid);
     if (toJid == null) {
+      _queueIceCandidate(sid, candidate);
       return;
     }
     final info = jingle.buildTransportInfo(
@@ -3495,6 +3496,7 @@ class XmppService extends ChangeNotifier {
       return;
     }
     _callPeerFullJidBySid[sid] = full;
+    _flushPendingIceCandidates(sid);
   }
 
   ISentrySpan? _startTransaction({
