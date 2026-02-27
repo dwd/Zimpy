@@ -3599,6 +3599,8 @@ class XmppService extends ChangeNotifier {
       ip: ip,
       port: port,
       type: type,
+      id: AbstractStanza.getRandomId(),
+      generation: 0,
     );
   }
 

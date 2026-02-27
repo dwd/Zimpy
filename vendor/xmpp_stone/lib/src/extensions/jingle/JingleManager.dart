@@ -49,6 +49,7 @@ class JingleIceCandidate {
     required this.ip,
     required this.port,
     required this.type,
+    this.id,
     this.generation,
   });
 
@@ -59,6 +60,7 @@ class JingleIceCandidate {
   final String ip;
   final int port;
   final String type;
+  final String? id;
   final int? generation;
 }
 
@@ -398,6 +400,7 @@ class JingleManager {
       final ip = child.getAttribute('ip')?.value ?? '';
       final portValue = child.getAttribute('port')?.value ?? '';
       final type = child.getAttribute('type')?.value ?? '';
+      final id = child.getAttribute('id')?.value;
       final component = int.tryParse(componentValue);
       final priority = int.tryParse(priorityValue);
       final port = int.tryParse(portValue);
@@ -420,6 +423,7 @@ class JingleManager {
         ip: ip,
         port: port,
         type: type,
+        id: (id == null || id.isEmpty) ? null : id,
         generation: generation,
       ));
     }
@@ -957,6 +961,8 @@ class JingleManager {
     }
     for (final candidate in transport.candidates) {
       final candidateElement = XmppElement()..name = 'candidate';
+      final candidateId = candidate.id ?? AbstractStanza.getRandomId();
+      candidateElement.addAttribute(XmppAttribute('id', candidateId));
       candidateElement.addAttribute(
           XmppAttribute('foundation', candidate.foundation));
       candidateElement.addAttribute(
@@ -969,11 +975,9 @@ class JingleManager {
       candidateElement.addAttribute(
           XmppAttribute('port', candidate.port.toString()));
       candidateElement.addAttribute(XmppAttribute('type', candidate.type));
-      final generation = candidate.generation;
-      if (generation != null) {
-        candidateElement.addAttribute(
-            XmppAttribute('generation', generation.toString()));
-      }
+      final generation = candidate.generation ?? 0;
+      candidateElement.addAttribute(
+          XmppAttribute('generation', generation.toString()));
       element.addChild(candidateElement);
     }
     return element;
