@@ -3198,6 +3198,7 @@ class XmppService extends ChangeNotifier {
       contents: filteredContents,
     );
     _jingleInitiatedTargets[sid] = toJid.fullJid ?? toJid.userAtDomain;
+    _flushPendingIceCandidates(sid);
     final result = await _sendIqAndAwait(iq);
     if (result == null || result.type != IqStanzaType.RESULT) {
       _failCallSession(sid, CallState.failed);
@@ -3392,6 +3393,13 @@ class XmppService extends ChangeNotifier {
     required String peerBareJid,
     required CallMediaKind defaultKind,
   }) {
+    final session = _callSessions[sid];
+    if (session != null &&
+        session.direction == CallDirection.outgoing &&
+        !_jingleInitiatedTargets.containsKey(sid)) {
+      _queueIceCandidate(sid, candidate);
+      return;
+    }
     final transports = _callLocalTransportsBySid[sid];
     if (transports == null || transports.isEmpty) {
       return;
