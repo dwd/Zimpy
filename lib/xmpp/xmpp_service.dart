@@ -2390,7 +2390,10 @@ class XmppService extends ChangeNotifier {
     if (pc == null) {
       return 'Unable to initialize WebRTC.';
     }
-    final offer = await pc.createOffer();
+    final offer = await pc.createOffer({
+      'offerToReceiveAudio': true,
+      'offerToReceiveVideo': video,
+    });
     await pc.setLocalDescription(offer);
     var mappings = mapSdpToJingleContents(sdp: offer.sdp ?? '');
     if (!video) {
@@ -2491,7 +2494,10 @@ class XmppService extends ChangeNotifier {
       );
       await pc.setRemoteDescription(RTCSessionDescription(sdp, 'offer'));
     }
-    final answer = await pc.createAnswer();
+    final answer = await pc.createAnswer({
+      'offerToReceiveAudio': true,
+      'offerToReceiveVideo': session.video,
+    });
     await pc.setLocalDescription(answer);
     final mappings = mapSdpToJingleContents(sdp: answer.sdp ?? '');
     final localDescriptions = <String, JingleRtpDescription>{};
