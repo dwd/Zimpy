@@ -33,7 +33,8 @@ JingleSdpMapping mapSdpToJingle({
   String? mid;
   String? msid;
   String? setup;
-  JingleDtlsFingerprint? fingerprint;
+  String? fingerprintHash;
+  String? fingerprintValue;
   final payloadTypes = <int, JingleRtpPayloadType>{};
   final feedback = <JingleRtpFeedback>[];
   final headerExtensions = <JingleRtpHeaderExtension>[];
@@ -61,23 +62,13 @@ JingleSdpMapping mapSdpToJingle({
       final value = line.substring('a=fingerprint:'.length).trim();
       final parts = value.split(' ');
       if (parts.length >= 2) {
-        fingerprint = JingleDtlsFingerprint(
-          hash: parts[0].toLowerCase(),
-          fingerprint: parts.sublist(1).join(' '),
-          setup: setup,
-        );
+        fingerprintHash = parts[0].toLowerCase();
+        fingerprintValue = parts.sublist(1).join(' ');
       }
       continue;
     }
     if (line.startsWith('a=setup:')) {
       setup = line.substring('a=setup:'.length).trim();
-      if (fingerprint != null) {
-        fingerprint = JingleDtlsFingerprint(
-          hash: fingerprint.hash,
-          fingerprint: fingerprint.fingerprint,
-          setup: setup,
-        );
-      }
       continue;
     }
     if (line.startsWith('a=rtpmap:')) {
@@ -257,6 +248,14 @@ JingleSdpMapping mapSdpToJingle({
     sources: sources.values.toList(),
     sourceGroups: sourceGroups,
   );
+  final fingerprint =
+      (fingerprintHash != null && fingerprintValue != null && fingerprintValue.isNotEmpty)
+          ? JingleDtlsFingerprint(
+              hash: fingerprintHash,
+              fingerprint: fingerprintValue,
+              setup: setup,
+            )
+          : null;
   final transport = JingleIceTransport(
     ufrag: ufrag ?? '',
     password: pwd ?? '',
@@ -305,51 +304,11 @@ String buildMinimalSdpFromJingle({
   buffer.writeln('o=- 0 0 IN IP4 127.0.0.1');
   buffer.writeln('s=-');
   buffer.writeln('t=0 0');
-  buffer.writeln('a=ice-ufrag:${transport.ufrag}');
-  buffer.writeln('a=ice-pwd:${transport.password}');
-  if (contentName != null && contentName.isNotEmpty) {
-    buffer.writeln('a=mid:$contentName');
-  }
-  if (transport.fingerprint != null) {
-    final fp = transport.fingerprint!;
-    buffer.writeln('a=fingerprint:${fp.hash} ${fp.fingerprint}');
-    if (fp.setup != null && fp.setup!.isNotEmpty) {
-      buffer.writeln('a=setup:${fp.setup}');
-    }
-  }
-  buffer.writeln('a=rtcp-mux');
-  final payloadIds = description.payloadTypes.map((p) => p.id).join(' ');
-  buffer.writeln('m=${description.media} 9 UDP/TLS/RTP/SAVPF $payloadIds');
-  buffer.writeln('c=IN IP4 0.0.0.0');
-  for (final payload in description.payloadTypes) {
-    final name = payload.name ?? 'unknown';
-    final clock = payload.clockRate ?? 0;
-    final channels = payload.channels;
-    final channelSuffix = channels != null && channels > 0 ? '/$channels' : '';
-    buffer.writeln('a=rtpmap:${payload.id} $name/$clock$channelSuffix');
-    if (payload.parameters.isNotEmpty) {
-      final params = payload.parameters.entries
-          .map((entry) => entry.value.isEmpty ? entry.key : '${entry.key}=${entry.value}')
-          .join(';');
-      buffer.writeln('a=fmtp:${payload.id} $params');
-    }
-  }
-  for (final fb in description.rtcpFeedback) {
-    final subtype = fb.subtype;
-    buffer.writeln(
-        'a=rtcp-fb:* ${fb.type}${subtype == null || subtype.isEmpty ? '' : ' $subtype'}');
-  }
-  for (final ext in description.headerExtensions) {
-    buffer.writeln('a=extmap:${ext.id} ${ext.uri}');
-  }
-  for (final source in description.sources) {
-    for (final entry in source.parameters.entries) {
-      buffer.writeln('a=ssrc:${source.ssrc} ${entry.key}:${entry.value}');
-    }
-  }
-  for (final group in description.sourceGroups) {
-    buffer.writeln('a=ssrc-group:${group.semantics} ${group.sources.join(' ')}');
-  }
+  buffer.write(_buildSdpSection(
+    description: description,
+    transport: transport,
+    contentName: contentName ?? description.media,
+  ));
   return buffer.toString();
 }
 
@@ -500,7 +459,8 @@ JingleSdpMapping? _mapLinesToJingle({
   String? mid;
   String? msid;
   String? setup;
-  JingleDtlsFingerprint? fingerprint;
+  String? fingerprintHash;
+  String? fingerprintValue;
   final payloadTypes = <int, JingleRtpPayloadType>{};
   final feedback = <JingleRtpFeedback>[];
   final headerExtensions = <JingleRtpHeaderExtension>[];
@@ -528,23 +488,13 @@ JingleSdpMapping? _mapLinesToJingle({
       final value = line.substring('a=fingerprint:'.length).trim();
       final parts = value.split(' ');
       if (parts.length >= 2) {
-        fingerprint = JingleDtlsFingerprint(
-          hash: parts[0].toLowerCase(),
-          fingerprint: parts.sublist(1).join(' '),
-          setup: setup,
-        );
+        fingerprintHash = parts[0].toLowerCase();
+        fingerprintValue = parts.sublist(1).join(' ');
       }
       continue;
     }
     if (line.startsWith('a=setup:')) {
       setup = line.substring('a=setup:'.length).trim();
-      if (fingerprint != null) {
-        fingerprint = JingleDtlsFingerprint(
-          hash: fingerprint.hash,
-          fingerprint: fingerprint.fingerprint,
-          setup: setup,
-        );
-      }
       continue;
     }
     if (line.startsWith('a=rtpmap:')) {
@@ -728,6 +678,14 @@ JingleSdpMapping? _mapLinesToJingle({
     sources: sources.values.toList(),
     sourceGroups: sourceGroups,
   );
+  final fingerprint =
+      (fingerprintHash != null && fingerprintValue != null && fingerprintValue.isNotEmpty)
+          ? JingleDtlsFingerprint(
+              hash: fingerprintHash,
+              fingerprint: fingerprintValue,
+              setup: setup,
+            )
+          : null;
   final transport = JingleIceTransport(
     ufrag: ufrag ?? '',
     password: pwd ?? '',
